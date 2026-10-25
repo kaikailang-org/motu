@@ -85,9 +85,14 @@ fn new_app(target: String, template: String) : Int / File + Env + Ffi + Stderr =
   } else {
     dir.create_dir(target) |> ignore
     copy_tree("#{src}/assets", "#{target}/assets")
-    let main = ok(read_file("#{src}/main.kai")) ?? ""
-    let fixed = string.replace(main, "examples/#{template}/assets", "assets")
-    write_file("#{target}/main.kai", fixed) |> ignore
+    let app = base_name(target)
+    dir.list_dir(src) |? (n => string.ends_with(n, ".kai")) |! (n => {
+      let text = ok(read_file("#{src}/#{n}")) ?? ""
+      let fixed = string.replace(string.replace(text, "examples/#{template}/assets", "assets"), "examples.#{template}.", "#{app}.")
+      let dest = if n == "main.kai" { "#{target}/main.kai" } else { "#{target}/#{app}/#{n}" }
+      if n != "main.kai" { dir.create_dir("#{target}/#{app}") |> ignore }
+      write_file(dest, fixed) |> ignore
+    })
     write_file("#{target}/kai.toml", manifest_for(base_name(target), home)) |> ignore
     write_file("#{target}/.gitignore", "build/\n.kai-cache/\nkai.lock\n") |> ignore
     say("created #{target} from '#{template}'; run it with: motu dev #{target}")
