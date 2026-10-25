@@ -462,9 +462,10 @@ static void on_print_done(id self, SEL cmd, id op, BOOL ok, void *ctx) {
   PrintJob *job = ctx;
   motu_on_reply(job->reply, ok ? "true" : "false");
   id win = MSG(id)(job->view, SEL_("window"));
-  MSG(void)(win, SEL_("close"));
   free(job->out);
   free(job);
+  /* Closing the host window inside its own print callback traps in AppKit. */
+  dispatch_async(dispatch_get_main_queue(), ^{ MSG(void)(win, SEL_("close")); });
 }
 
 static Class g_print_delegate_class;
