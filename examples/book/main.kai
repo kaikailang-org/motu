@@ -11,6 +11,7 @@ import motu.menu
 import motu.project
 import motu.shim
 import examples.book.commands
+import examples.book.compile
 import examples.book.model
 
 fn arg_int(c: Call, k: String) : Int = json.as_int(app.arg(c, k)) ?? 0
@@ -76,7 +77,23 @@ fn base_name(path: String) : String = match string.last_index_of(path, "/") {
 
 # --- commands ---
 
-fn in_project(c: Call) : Result[JsonValue, String] / Project + File + Clock + SecureRandom = match c.cmd {
+fn compile_to(c: Call) : Result[JsonValue, String] / Project + Desktop + Dialog + File + Ffi = {
+  let o = Options { format: arg_text(c, "format"), titles: json.as_bool(app.arg(c, "titles")) ?? true, title_page: json.as_bool(app.arg(c, "title_page")) ?? true }
+  let out = match app.arg_string(c, "out") {
+    Some(p) -> Some(p)
+    None    -> match commands.load() {
+      Ok(b)  -> Dialog.save_file(c.win, "Compile the manuscript", compile.suggested_name(b, o.format))
+      Err(_) -> None
+    }
+  }
+  match out {
+    Some(path) -> compile.compile(c.win, o, path)
+    None       -> Ok(JNull)
+  }
+}
+
+fn in_project(c: Call) : Result[JsonValue, String] / Project + Desktop + Dialog + File + Ffi + Clock + SecureRandom = match c.cmd {
+  "compile"      -> compile_to(c)
   "load"         -> match commands.load() { Ok(b) -> Ok(model.book_json(b)); Err(e) -> Err(e) }
   "stats"        -> commands.stats()
   "add"          -> commands.add(arg_text(c, "parent"), arg_text(c, "kind"), arg_text(c, "title"), arg_int(c, "index"))

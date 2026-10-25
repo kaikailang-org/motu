@@ -1,0 +1,99 @@
+#[doc("Compile: the manuscript, in binder order, out as Markdown, HTML or PDF.")]
+import encoding.json
+import encoding.json_bind
+import motu.desktop
+import motu.markdown_html
+import motu.project
+import examples.book.commands
+import examples.book.model
+
+#[doc("What the page asked for.")]
+pub type Options = { format: String, titles: Bool, title_page: Bool }
+
+#[doc("One piece of the manuscript: its title, its depth under the manuscript, and its Markdown body.")]
+pub type Part = { title: String, depth: Int, body: String }
+
+fn depth_of(b: Book, n: Node) : Int =
+  if n.parent == model.MANUSCRIPT or n.parent == "" { 1 } else {
+    match b.nodes |> list.find(x => x.id == n.parent) {
+      Some(p) -> 1 + depth_of(b, p)
+      None    -> 1
+    }
+  }
+
+fn body_of(n: Node) : String / Project = match Project.read(model.doc_path(n.id)) {
+  Ok(text) -> model.split_front(text).snd
+  Err(_)   -> ""
+}
+
+#[doc("The manuscript's documents and folders in reading order, with each document's body read.")]
+pub fn parts(b: Book, progress: (Int, Int) -> Unit / e) : [Part] / Project + e = {
+  let nodes = model.manuscript_order(b)
+  let total = list.length(nodes)
+  list.enumerate(nodes) | (p => {
+    progress(p.fst + 1, total)
+    Part { title: p.snd.title, depth: depth_of(b, p.snd), body: if p.snd.kind == "doc" { body_of(p.snd) } else { "" } }
+  })
+}
+
+fn heading(depth: Int, title: String) : String =
+  "#{string.repeat("#", if depth > 6 { 6 } else { depth })} #{title}\n\n"
+
+fn title_page_md(b: Book) : String =
+  if b.author == "" { "# #{b.title}\n\n" } else { "# #{b.title}\n\n*#{b.author}*\n\n" }
+
+#[doc("The whole manuscript as one Markdown text.")]
+pub fn markdown_of(b: Book, ps: [Part], o: Options) : String = {
+  let front = if o.title_page { title_page_md(b) } else { "" }
+  let pieces = ps | (p => {
+    let h = if o.titles { heading(if o.title_page { p.depth + 1 } else { p.depth }, p.title) } else { "" }
+    "#{h}#{p.body}\n\n"
+  })
+  front ++ string.join(pieces, "")
+}
+
+fn css(print: Bool) : String = if print {
+  "body{font:11pt/1.55 Georgia,'Iowan Old Style',serif;margin:2.2cm 2cm} h1{page-break-before:always;font-size:20pt;margin-top:3cm} h1:first-of-type{page-break-before:avoid} h2{page-break-after:avoid} p{text-align:justify;hyphens:auto;margin:0} p+p{text-indent:1.4em} .footnotes{font-size:9pt;border-top:1px solid #999;margin-top:2em}"
+} else {
+  "body{max-width:40rem;margin:3rem auto;padding:0 1rem;font:18px/1.65 Georgia,'Iowan Old Style',serif} h1{margin-top:3em} p{margin:0} p+p{text-indent:1.4em} .footnotes{font-size:.85em;border-top:1px solid #9995;margin-top:3em}"
+}
+
+#[doc("The manuscript as one HTML document.")]
+pub fn html_of(b: Book, md: String, print: Bool) : String =
+  "<!doctype html>\n<html lang=\"#{markdown_html.escape(if b.language == "" { "en" } else { b.language })}\"><head><meta charset=\"utf-8\"><title>#{markdown_html.escape(b.title)}</title><style>#{css(print)}</style></head><body>\n#{markdown_html.render(md)}</body></html>\n"
+
+fn extension(format: String) : String = match format {
+  "md"   -> "md"
+  "html" -> "html"
+  other  -> other
+}
+
+fn write_out(path: String, text: String) : Result[String, String] / File + Ffi =
+  match project.write_atomic(path, text) {
+    Ok(_)  -> Ok(path)
+    Err(e) -> Err(e)
+  }
+
+#[doc("Compiles the open project to `out`, reporting progress to window `win`.")]
+pub fn compile(win: Int, o: Options, out: String) : Result[JsonValue, String] / Project + Desktop + File + Ffi =
+  match commands.load() {
+    Err(e) -> Err(e)
+    Ok(b)  -> {
+      let ps = parts(b, (done, total) => Desktop.emit(win, "compile-progress", JObj([("done", JNum(done)), ("total", JNum(total))])))
+      let md = markdown_of(b, ps, o)
+      let written = match o.format {
+        "md"   -> write_out(out, md)
+        "html" -> write_out(out, html_of(b, md, false))
+        "pdf"  -> if Desktop.print_pdf(html_of(b, md, true), "motu://files/", out) { Ok(out) } else { Err("printing failed") }
+        other  -> Err("cannot compile to #{other} yet")
+      }
+      match written {
+        Ok(path) -> Ok(JStr(path))
+        Err(e)   -> Err(e)
+      }
+    }
+  }
+
+#[doc("The file name a compile suggests: the book's title and the format's extension.")]
+pub fn suggested_name(b: Book, format: String) : String =
+  "#{if b.title == "" { "Book" } else { b.title }}.#{extension(format)}"
