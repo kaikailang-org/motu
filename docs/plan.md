@@ -110,6 +110,17 @@ documents (`tools/make-bench-book.py`, run with `#bench=<project>|<dir>`), all (
 | resident memory of the process at its peak | 132–186 MB |
 | `.app` bundle: the book application / `hello` | 2.2 MB / 720 KB |
 
+macOS 15.7.9, GitHub `macos-15` runner (Apple M1, virtual), native backend, a
+fresh machine on every run so the first launch finds WebKit and the program
+cold (M):
+
+- Start to first paint, then quit: 1.76 s on the first launch; 0.43–0.81 s
+  on the next three. First paint 6–146 ms after the page starts.
+- Every example's self-test passes. JavaScriptCore on macOS 15 aborts when it
+  starts on a fiber stack, so the shim runs the event loop on the main
+  thread's own stack; macOS 26 tolerated it, which is why only this runner
+  showed it.
+
 Linux, GitHub `ubuntu-24.04` runner under Xvfb, native backend:
 
 - Start to first paint, each launch starting its own Xvfb: 6.4 s on the first
