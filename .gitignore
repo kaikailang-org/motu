@@ -1,0 +1,6 @@
+build/
+dist/
+*.o
+kai.lock
+.kai/
+.DS_Store
