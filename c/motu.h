@@ -100,9 +100,10 @@ const char *motu_data_dir(void);
 const char *motu_exe_dir(void);
 
 /* --- printing ---
- * [any] Renders the page at `url` in an offscreen webview and writes it to
+ * [any] Renders `html` in an offscreen webview, relative URLs against
+ * `base_url` (e.g. motu://files/), paginated by its print CSS, and writes it to
  * `out_path` as PDF; answers true or false through motu_on_reply. */
-void motu_print_pdf(void *reply, const char *url, const char *out_path);
+void motu_print_pdf(void *reply, const char *html, const char *base_url, const char *out_path);
 
 /* --- callbacks, implemented by the kaikai side --- */
 

@@ -558,7 +558,7 @@ async function selftest(dir) {
     const tide = await call('search', { query: 'tide' });
     check('search finds notes', tide.length === 1 && tide[0] === r.id);
     await refreshStats();
-    check('word counts', S.manuscript === 17, S.manuscript);
+    check('word counts', S.manuscript === 18, S.manuscript);
     await call('snapshot', { id: first });
     const before = (await call('snapshots', { id: first }))[0];
     S.docs.get(first).body = 'A different text.'; schedule(first); await flushAll();

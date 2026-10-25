@@ -489,11 +489,12 @@ static void on_print_done(id self, SEL cmd, id op, BOOL ok, void *ctx) {
 
 static Class g_print_delegate_class;
 
-void motu_print_pdf(void *reply, const char *url, const char *out_path) {
+void motu_print_pdf(void *reply, const char *html, const char *base_url, const char *out_path) {
   PrintJob *job = calloc(1, sizeof *job);
   job->reply = reply;
   job->out = strdup(out_path);
-  id u = MSG(id)(nsstr(url), SEL_("copy"));
+  id h = MSG(id)(nsstr(html), SEL_("copy"));
+  id u = MSG(id)(nsstr(base_url), SEL_("copy"));
   on_main(^{
     id config = NEW("WKWebViewConfiguration");
     MSG(void, id, id)(config, SEL_("setURLSchemeHandler:forURLScheme:"),
@@ -512,8 +513,7 @@ void motu_print_pdf(void *reply, const char *url, const char *out_path) {
     id delegate = MSG(id)((id)g_print_delegate_class, SEL_("new"));
     object_setInstanceVariable(delegate, "job", (void *)job);
     MSG(void, id)(view, SEL_("setNavigationDelegate:"), delegate);
-    MSG(id, id)(view, SEL_("loadRequest:"),
-        MSG(id, id)(CLS("NSURLRequest"), SEL_("requestWithURL:"), MSG(id, id)(CLS("NSURL"), SEL_("URLWithString:"), u)));
+    MSG(id, id, id)(view, SEL_("loadHTMLString:baseURL:"), h, MSG(id, id)(CLS("NSURL"), SEL_("URLWithString:"), u));
   });
 }
 

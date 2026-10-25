@@ -19,7 +19,7 @@ pub effect Desktop {
   set_fullscreen(win: Int, on: Bool) : Unit
   focus(win: Int) : Unit
   set_menu_state(id: String, enabled: Bool, checked: Bool) : Unit
-  print_pdf(url: String, out_path: String) : Bool
+  print_pdf(html: String, base_url: String, out_path: String) : Bool
   data_dir() : String
   serve_files(root: String) : Unit
   quit() : Unit
@@ -104,8 +104,8 @@ fn clipboard_text() : String / Spawn + Ffi = {
   json.as_string(json_decode(answer) ?? JNull) ?? ""
 }
 
-fn print_to(url: String, out: String) : Bool / Spawn + Ffi =
-  await_reply(ud => shim.motu_print_pdf(ud, url, out)) == "true"
+fn print_to(html: String, base: String, out: String) : Bool / Spawn + Ffi =
+  await_reply(ud => shim.motu_print_pdf(ud, html, base, out)) == "true"
 
 fn menu_state(id: String, enabled: Bool, checked: Bool) : Unit / Ffi =
   shim.motu_menu_set_state(id, flag(not enabled, MENU_DISABLED) + flag(checked, MENU_CHECKED))
@@ -124,7 +124,7 @@ pub fn with_desktop[r, e](body: () -> r / Desktop + Dialog + Shell + Clipboard +
           set_fullscreen(win, on, resume)          -> resume(shim.motu_window_set_fullscreen(win, flag(on, 1)))
           focus(win, resume)                       -> resume(shim.motu_window_focus(win))
           set_menu_state(id, on, checked, resume)  -> resume(menu_state(id, on, checked))
-          print_pdf(url, out, resume)              -> resume(print_to(url, out))
+          print_pdf(html, base, out, resume)       -> resume(print_to(html, base, out))
           data_dir(resume)                         -> resume(shim.motu_data_dir())
           serve_files(root, resume)                -> resume(shim.motu_set_files_root(root))
           quit(resume)                             -> resume(shim.motu_quit())

@@ -5,6 +5,7 @@ documents; each document is `docs/<id>.md`, Markdown with TOML front matter.
 import encoding.toml
 import encoding.json
 import encoding.json_bind
+import motu.markdown
 import motu.project
 
 #[doc("One entry of the binder: a folder, a text document, or an imported research file.")]
@@ -89,21 +90,11 @@ pub fn book_text(b: Book) : String = toml.encode(TTbl([
 
 # --- documents ---
 
-#[doc("Splits a leading `+++` TOML block from the Markdown body.")]
-pub fn split_front(text: String) : (String, String) =
-  if not string.starts_with(text, "+++\n") {
-    ("", text)
-  } else {
-    let rest = string.byte_slice(text, 4, string.byte_length(text) - 4) ?? ""
-    match string.index_of(rest, "\n+++") {
-      None    -> ("", text)
-      Some(i) -> {
-        let after = if string.byte_length(rest) > i + 4 { i + 5 } else { i + 4 }
-        let body = string.byte_slice(rest, after, string.byte_length(rest) - after) ?? ""
-        (string.byte_slice(rest, 0, i) ?? "", if string.starts_with(body, "\n") { string.drop_prefix(body, "\n") ?? body } else { body })
-      }
-    }
-  }
+#[doc("Splits a document file into its front matter and its body, without the blank line between.")]
+pub fn split_front(text: String) : (String, String) = {
+  let (front, body) = markdown.split_front_matter(text)
+  (front, if front != "" and string.starts_with(body, "\n") { string.drop_prefix(body, "\n") ?? body } else { body })
+}
 
 #[doc("A document's metadata from its front matter; empty fields when absent.")]
 pub fn meta_of(front: String, fallback_title: String) : Meta = match toml.decode(front) {

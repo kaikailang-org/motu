@@ -8,6 +8,7 @@ import encoding.json
 import encoding.json_bind
 import motu.app
 import motu.project
+import motu.markdown_text
 import motu.search
 import examples.book.model
 
@@ -66,7 +67,7 @@ pub fn create(title: String, author: String) : Result[JsonValue, String] / Proje
   }
 }
 
-fn word_total(text: String) : Int = list.length(search.words(text))
+fn word_total(text: String) : Int = markdown_text.word_count(text)
 
 #[doc("Word counts of every text document, and the manuscript's total.")]
 pub fn stats() : Result[JsonValue, String] / Project = match load() {

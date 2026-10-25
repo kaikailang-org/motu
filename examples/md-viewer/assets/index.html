@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Markdown Viewer</title>
+<style>
+  :root { color-scheme: light dark; --muted: #888; --line: #8884; }
+  body { margin: 0; font: 15px/1.5 -apple-system, system-ui, sans-serif; }
+  header { position: sticky; top: 0; display: flex; gap: .5rem; align-items: center; padding: .5rem .8rem; border-bottom: 1px solid var(--line); background: Canvas; }
+  header .path { flex: 1; color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  article { max-width: 44rem; margin: 2rem auto 6rem; padding: 0 1.5rem; font: 17px/1.65 ui-serif, Georgia, serif; }
+  article h1, article h2, article h3 { font-family: -apple-system, system-ui, sans-serif; line-height: 1.25; }
+  article pre { background: #8881; padding: .8rem; border-radius: 6px; overflow: auto; font-size: .85em; }
+  article code { font-family: ui-monospace, Menlo, monospace; font-size: .9em; }
+  article blockquote { margin-left: 0; padding-left: 1rem; border-left: 3px solid var(--line); color: var(--muted); }
+  article img { max-width: 100%; }
+  article .footnotes { font-size: .85em; border-top: 1px solid var(--line); margin-top: 3rem; }
+  .empty { color: var(--muted); text-align: center; margin-top: 20vh; }
+</style>
+</head>
+<body>
+<header>
+  <button id="open">Open…</button><button id="reload">Reload</button><button id="print">Save as PDF…</button>
+  <span class="path" id="path"></span><span id="words" class="path" style="flex:0"></span>
+</header>
+<article id="doc"><div class="empty">Open a Markdown file, or drop one here</div></article>
+<script>
+  let current = null;
+  const show = (r) => {
+    if (!r) return;
+    current = r.path;
+    const doc = document.getElementById('doc');
+    doc.innerHTML = r.html;
+    for (const img of doc.querySelectorAll('img')) {
+      const src = img.getAttribute('src') || '';
+      if (!/^[a-z]+:|^\//i.test(src)) img.src = 'motu://files/' + src;
+    }
+    document.getElementById('path').textContent = r.path;
+    document.getElementById('words').textContent = `${r.words} words`;
+    document.title = r.path.split('/').pop();
+  };
+  const actions = {
+    open: async () => show(await motu.invoke('pick')),
+    reload: async () => current && show(await motu.invoke('load', { path: current })),
+    print: async () => current && motu.invoke('print', { path: current }),
+  };
+  for (const id of Object.keys(actions)) document.getElementById(id).onclick = actions[id];
+  motu.on('menu', (id) => actions[id] && actions[id]());
+  motu.on('open', async (path) => show(await motu.invoke('load', { path })));
+  if (location.hash.startsWith('#selftest=')) (async () => {
+    const [md, pdf] = decodeURIComponent(location.hash.slice(10)).split('|');
+    const r = await motu.invoke('load', { path: md }); show(r);
+    const h1 = document.querySelector('#doc h1')?.textContent;
+    const notes = document.querySelectorAll('.footnotes li').length;
+    const out = await motu.invoke('print', { path: md, out: pdf });
+    await motu.invoke('motu.report', `h1=${h1} | words=${r.words} | footnotes=${notes} | pdf=${out ? 'written' : 'none'}`);
+  })();
+</script>
+</body>
+</html>

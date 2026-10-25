@@ -1,0 +1,101 @@
+import ffi
+import os.env
+import encoding.json
+import encoding.json_bind
+import motu.app
+import motu.desktop
+import motu.markdown
+import motu.markdown_html
+import motu.markdown_text
+import motu.menu
+import motu.shim
+
+fn dir_of(path: String) : String = match string.last_index_of(path, "/") {
+  Some(i) -> string.byte_slice(path, 0, i) ?? "."
+  None    -> "."
+}
+
+fn print_css() : String =
+  "<style>body{font:11pt/1.5 Georgia,serif;margin:2cm} h1,h2{page-break-after:avoid} img{max-width:100%} pre{white-space:pre-wrap} .footnotes{font-size:9pt;border-top:1px solid #999;margin-top:2em}</style>"
+
+fn load(path: String) : Result[JsonValue, String] / Desktop + File =
+  match read_file(path) {
+    Err(e)   -> Err(e)
+    Ok(text) -> {
+      Desktop.serve_files(dir_of(path))
+      let body = markdown.split_front_matter(text).snd
+      Ok(JObj([
+        ("path", JStr(path)),
+        ("html", JStr(markdown_html.render(text))),
+        ("words", JNum(markdown_text.word_count(body))),
+      ]))
+    }
+  }
+
+fn print(c: Call, path: String) : Result[JsonValue, String] / Desktop + Dialog + File =
+  match read_file(path) {
+    Err(e)   -> Err(e)
+    Ok(text) -> {
+      let out = app.arg_string(c, "out") ?? (Dialog.save_file(c.win, "Save as PDF", "document.pdf") ?? "")
+      if out == "" {
+        Ok(JNull)
+      } else {
+        Desktop.serve_files(dir_of(path))
+        let html = "<!doctype html><html><head><meta charset=\"utf-8\">#{print_css()}</head><body>#{markdown_html.render(text)}</body></html>"
+        if Desktop.print_pdf(html, "motu://files/", out) { Ok(JStr(out)) } else { Err("printing failed") }
+      }
+    }
+  }
+
+fn command(c: Call) : Result[JsonValue, String] / Desktop + Dialog + Shell + File = match c.cmd {
+  "pick"  -> match Dialog.open_files(c.win, "Open a Markdown file", ["md", "markdown", "txt"], false) {
+    [p, ..._] -> load(p)
+    []        -> Ok(JNull)
+  }
+  "load"  -> load(app.arg_string(c, "path") ?? "")
+  "print" -> print(c, app.arg_string(c, "path") ?? "")
+  other   -> Err("unknown command #{other}")
+}
+
+fn on_event(ev: Event) : Unit / Desktop = match ev {
+  FilesDropped(win, [p, ..._]) -> Desktop.emit(win, "open", JStr(p))
+  MenuItem(id)                 -> Desktop.emit(1, "menu", JStr(id))
+  other                        -> app.default_event(other)
+}
+
+fn main() : Int / Spawn + Ffi + File + Stdout + Env = {
+  let cfg = Config {
+    name: "Markdown Viewer", assets: "examples/md-viewer/assets", page: env.get("MOTU_PAGE") ?? "index.html",
+    title: "Markdown Viewer", width: 900, height: 700,
+    menus: [
+      Menu { title: "File", items: [Item("open", "Open…", "o"), Item("reload", "Reload", "r"), Item("print", "Save as PDF…", "p"), Separator, Item("close-window", "Close", "w")] },
+      menu.edit_menu(),
+    ],
+  }
+  app.run(cfg, c => command(c), ev => on_event(ev))
+}
+
+extern "C" fn motu_on_message(ud: Userdata, win: Int, json: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, PageMessage(win, json))
+}
+
+extern "C" fn motu_on_window_event(ud: Userdata, win: Int, kind: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, WindowEvent(win, kind))
+}
+
+extern "C" fn motu_on_menu(ud: Userdata, id: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, MenuChosen(id))
+}
+
+extern "C" fn motu_on_drop(ud: Userdata, win: Int, paths: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, Dropped(win, paths))
+}
+
+extern "C" fn motu_on_reply(ud: Userdata, json: String) : Unit = {
+  let pid: Pid[String] = take_userdata(ud)
+  mailbox_send(pid, json)
+}
