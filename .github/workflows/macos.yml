@@ -26,13 +26,13 @@ jobs:
         run: |
           for i in 1 2 3 4; do
             t0=$(python3 -c 'import time; print(time.time_ns())')
-            MOTU_PAGE='index.html#ready' timeout 60 ./build/hello
+            MOTU_PAGE='index.html#ready' perl -e "alarm 60; exec @ARGV" ./build/hello
             echo "launch $i: $(( ($(python3 -c 'import time; print(time.time_ns())') - t0) / 1000000 )) ms"
           done
 
       - name: Self-tests
         run: |
-          MOTU_PAGE='index.html#selftest' timeout 60 ./build/hello
+          MOTU_PAGE='index.html#selftest' perl -e "alarm 60; exec @ARGV" ./build/hello
           mkdir -p "$RUNNER_TEMP/book"
-          MOTU_PAGE="index.html#selftest=$RUNNER_TEMP/book" timeout 120 ./build/book | tee book.txt
+          MOTU_PAGE="index.html#selftest=$RUNNER_TEMP/book" perl -e "alarm 120; exec @ARGV" ./build/book | tee book.txt
           ! grep -E '^FAIL' book.txt
