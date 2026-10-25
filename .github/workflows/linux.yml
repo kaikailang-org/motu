@@ -74,3 +74,51 @@ jobs:
         run: |
           sudo apt-get install -y -q --no-install-recommends gdb
           MOTU_PAGE='index.html#selftest' xvfb-run -a timeout 90 gdb -q -batch -ex run -ex 'thread apply all bt 25' ./build/hello 2>&1 | tail -250
+
+  interactive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK 4, WebKitGTK 6.0, Xvfb and the input tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libgtk-4-1 libwebkitgtk-6.0-4 xvfb \
+            openbox xdotool xclip x11-utils imagemagick gdb dbus-daemon at-spi2-core \
+            python3-gi python3-xlib gir1.2-gtk-4.0 gir1.2-atspi-2.0 shared-mime-info
+
+      - name: Install kai
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/kaikailang-org/kaikai/main/install.sh | sh
+          echo "$HOME/.kaikai/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: kai build tests/interactive/main.kai -o build/motu-input
+
+      - name: Allow the web process sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Drive menus, shortcuts, dialogs, drops, shell and window events
+        id: drive
+        run: |
+          mkdir -p shots
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern="$RUNNER_TEMP/core.%e.%p"
+          G_DEBUG=fatal-criticals MOTU_SHOTS=$PWD/shots xvfb-run -a -s '-screen 0 1280x1024x24' \
+            dbus-run-session -- timeout 300 python3 tests/interactive/drive.py build/motu-input "$RUNNER_TEMP/input" | tee input.txt
+          grep -q '^all checks passed$' input.txt
+
+      - name: Backtrace of a crash
+        if: failure() && steps.drive.outcome == 'failure'
+        run: for c in "$RUNNER_TEMP"/core.*; do [ -f "$c" ] && gdb -q -batch -ex 'thread apply all bt 30' build/motu-input "$c" 2>&1 | tail -300; done; true
+
+      - name: Screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interactive-screenshots
+          path: shots/

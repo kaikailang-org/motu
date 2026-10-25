@@ -1,0 +1,72 @@
+# The program the interactive Linux test drives with real X input: it prints
+# one line per event and dialog answer. Quit only reports; closing the window ends it.
+import os.env
+import encoding.json
+import encoding.json_bind
+import motu.app
+import motu.desktop
+import motu.menu
+
+fn paths_text(paths: [String]) : String = json_encode(JArr(paths | (p => JStr(p))))
+
+fn target() : String / Env = env.get("MOTU_TEST_FILE") ?? ""
+
+fn menus() : [Menu] = [
+  Menu {
+    title: "File",
+    items: [
+      Item("hello", "Say Hello", ""),
+      Item("open", "Open…", "o"),
+      Item("save", "Save…", "s"),
+      Item("ask", "Ask…", "k"),
+      Separator,
+      Item("shell-open", "Open Externally", "e"),
+      Item("reveal", "Reveal", "r"),
+    ],
+  },
+  Menu { title: "View", items: [Checked("wrap", "Wrap Lines", "l", true)] },
+  menu.edit_menu(),
+]
+
+fn chosen(id: String) : Unit / Desktop + Dialog + Shell + Stdout + Env = {
+  println("menu #{id}")
+  match id {
+    "open"       -> println("open #{paths_text(Dialog.open_files(1, "Open", [], false))}")
+    "save"       -> println("save #{Dialog.save_file(1, "Save", "out.txt") ?? "none"}")
+    "ask"        -> println("ask #{Dialog.ask(1, "Question", "Pick one", ["Yes", "No", "Cancel"])}")
+    "shell-open" -> { Shell.open_path(target()); println("shell-open sent") }
+    "reveal"     -> { Shell.reveal_path(target()); println("reveal sent") }
+    _            -> Desktop.emit(1, "menu", JStr(id))
+  }
+}
+
+fn event(ev: Event) : Unit / Desktop + Dialog + Shell + Stdout + Env = match ev {
+  MenuItem(id)            -> chosen(id)
+  FilesDropped(win, ps)   -> println("drop #{win} #{paths_text(ps)}")
+  CloseRequested(win)     -> { println("close-requested #{win}"); Desktop.close_window(win) }
+  QuitRequested           -> println("quit-requested")
+  Focused(win)            -> println("focus #{win}")
+  Blurred(win)            -> println("blur #{win}")
+  Resized(win)            -> println("resize #{win}")
+}
+
+fn command(c: Call) : Result[JsonValue, String] / Desktop + Stdout = match c.cmd {
+  "ready" -> { println("ready"); Ok(JNull) }
+  "wrap"  -> {
+    let on = json.as_bool(app.arg(c, "on")) ?? false
+    Desktop.set_menu_state("wrap", true, on)
+    println("wrap #{on}")
+    Ok(JNull)
+  }
+  other -> Err("unknown command #{other}")
+}
+
+fn main() : Int / Spawn + Ffi + Stdout + Env + File = {
+  let cfg = Config {
+    name: "motu-input", assets: "tests/interactive/assets", page: "index.html",
+    title: "Motu input", width: 640, height: 400, menus: menus(),
+  }
+  let status = app.run(cfg, c => command(c), ev => event(ev))
+  println("run returned #{status}")
+  status
+}

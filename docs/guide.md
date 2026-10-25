@@ -88,6 +88,10 @@ a project's images and PDFs.
   its argument and quits. Every example reads `MOTU_PAGE`, so
   `MOTU_PAGE='index.html#selftest' ./build/hello` runs its self-test and prints
   one line.
+- On Linux, `tests/interactive/drive.py` drives `tests/interactive/main.kai`
+  with real X input under Xvfb: menus by mouse and shortcut, checkmarks, the
+  file and message dialogs, a file dropped from another window, shell open and
+  reveal, focus, resize, close and quit. CI runs it in `.github/workflows/linux.yml`.
 
 ## Platforms
 
