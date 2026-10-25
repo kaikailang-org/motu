@@ -1,7 +1,8 @@
 #[doc("The book's commands that work inside one open project.")]
 import fs.file
 import time
-import uuid
+import random_secure
+import encoding.hex
 import date.rfc3339
 import encoding.json
 import encoding.json_bind
@@ -11,7 +12,7 @@ import motu.search
 import examples.book.model
 
 #[doc("A short random id for a new node.")]
-pub fn new_id() : String / Random = string.byte_slice(string.replace(uuid.v4(), "-", ""), 0, 12) ?? "node"
+pub fn new_id() : String / SecureRandom = hex.encode(random_secure.bytes(6))
 
 fn ok_json[a](r: Result[a, String], f: (a) -> JsonValue) : Result[JsonValue, String] = match r {
   Ok(v)  -> Ok(f(v))
@@ -54,7 +55,7 @@ fn with_node[e](id: String, f: (Book, Node) -> Result[JsonValue, String] / Proje
   }
 
 #[doc("Creates the bundle at the project root: folders, `project.toml` and the first chapter.")]
-pub fn create(title: String, author: String) : Result[JsonValue, String] / Project + Random = {
+pub fn create(title: String, author: String) : Result[JsonValue, String] / Project + SecureRandom = {
   ["docs", "notes", "snapshots", "research"] |! (d => Project.make_dir(d) |> ignore)
   let first = new_id()
   let b = model.fresh(title, author, first)
@@ -83,7 +84,7 @@ pub fn stats() : Result[JsonValue, String] / Project = match load() {
 }
 
 #[doc("Adds a node: a folder, or a document with an empty file.")]
-pub fn add(parent: String, kind: String, title: String, index: Int) : Result[JsonValue, String] / Project + Random = {
+pub fn add(parent: String, kind: String, title: String, index: Int) : Result[JsonValue, String] / Project + SecureRandom = {
   let id = new_id()
   let n = Node { id: id, parent: parent, kind: kind, title: title, file: "" }
   let written = if kind == "doc" {
@@ -216,7 +217,7 @@ fn file_name(path: String) : String = match string.last_index_of(path, "/") {
   None    -> path
 }
 
-fn import_one(path: String) : Result[Node, String] / Project + File + Random = match file.read_bytes(path) {
+fn import_one(path: String) : Result[Node, String] / Project + File + SecureRandom = match file.read_bytes(path) {
   Err(e)    -> Err(e)
   Ok(bytes) -> {
     let id = new_id()
@@ -232,7 +233,7 @@ fn import_one(path: String) : Result[Node, String] / Project + File + Random = m
 }
 
 #[doc("Copies files from outside into the project's research folder and adds them to the binder.")]
-pub fn import_files(paths: [String]) : Result[JsonValue, String] / Project + File + Random = {
+pub fn import_files(paths: [String]) : Result[JsonValue, String] / Project + File + SecureRandom = {
   Project.make_dir("research") |> ignore
   let nodes = paths || (p => match import_one(p) { Ok(n) -> [n]; Err(_) -> [] })
   edit(b => Ok(nodes |> list.foldl(b, (bk, n) => model.place(bk, n, model.RESEARCH, 1000000))))

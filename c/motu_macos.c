@@ -27,6 +27,8 @@ typedef struct { double w, h; } MotuSize;
 
 static void *g_ud;
 static char *g_root;
+static char *g_files_root;
+static pthread_mutex_t g_files_lock = PTHREAD_MUTEX_INITIALIZER;
 static id g_app;
 
 #define MOTU_MAX_WINDOWS 64
@@ -162,11 +164,16 @@ static void on_scheme_start(id self, SEL cmd, id view, id task) {
   (void)self; (void)cmd; (void)view;
   id url = MSG(id)(MSG(id)(task, SEL_("request")), SEL_("URL"));
   const char *path = cstr(MSG(id)(url, SEL_("path")));
-  if (!g_root || strstr(path, "..")) { scheme_respond(task, url, 403, "text/plain", 0); return; }
-  if (path[0] == '\0' || strcmp(path, "/") == 0) path = "/index.html";
-  size_t n = strlen(g_root) + strlen(path) + 1;
+  int files = strcmp(cstr(MSG(id)(url, SEL_("host"))), "files") == 0;
+  pthread_mutex_lock(&g_files_lock);
+  char *base = files ? (g_files_root ? strdup(g_files_root) : 0) : (g_root ? strdup(g_root) : 0);
+  pthread_mutex_unlock(&g_files_lock);
+  if (!base || strstr(path, "..")) { free(base); scheme_respond(task, url, 403, "text/plain", 0); return; }
+  if (!files && (path[0] == '\0' || strcmp(path, "/") == 0)) path = "/index.html";
+  size_t n = strlen(base) + strlen(path) + 1;
   char *full = malloc(n);
-  snprintf(full, n, "%s%s", g_root, path);
+  snprintf(full, n, "%s%s", base, path);
+  free(base);
   id data = MSG(id, id)(CLS("NSData"), SEL_("dataWithContentsOfFile:"), nsstr(full));
   if (data) scheme_respond(task, url, 200, mime_of(full), data);
   else scheme_respond(task, url, 404, "text/plain", 0);
@@ -581,6 +588,13 @@ void motu_init(void *ud, const char *app_name) {
   motu_menu_item("select-all", "Select All", "a", 0);
   motu_menu_end();
   motu_menu_install();
+}
+
+void motu_set_files_root(const char *root) {
+  pthread_mutex_lock(&g_files_lock);
+  free(g_files_root);
+  g_files_root = root[0] ? strdup(root) : 0;
+  pthread_mutex_unlock(&g_files_lock);
 }
 
 void motu_set_asset_root(const char *root) {

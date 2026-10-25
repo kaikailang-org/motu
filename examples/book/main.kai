@@ -1,0 +1,182 @@
+import ffi
+import fs.dir
+import fs.file
+import os.env
+import encoding.json
+import encoding.json_bind
+import encoding.toml
+import motu.app
+import motu.desktop
+import motu.menu
+import motu.project
+import motu.shim
+import examples.book.commands
+import examples.book.model
+
+fn arg_int(c: Call, k: String) : Int = json.as_int(app.arg(c, k)) ?? 0
+
+fn arg_text(c: Call, k: String) : String = app.arg_string(c, k) ?? ""
+
+fn arg_strings(c: Call, k: String) : [String] = match app.arg(c, k) {
+  JArr(xs) -> xs || (x => match x { JStr(s) -> [s]; _ -> [] })
+  _        -> []
+}
+
+# --- recent projects, in the per-user data directory ---
+
+fn data_home() : String / Desktop + File = {
+  let d = "#{Desktop.data_dir()}/Motu Book"
+  dir.create_dir(d) |> ignore
+  d
+}
+
+fn recent() : [String] / Desktop + File = match read_file("#{data_home()}/recent.toml") {
+  Ok(text) -> match toml.decode(text) {
+    Some(TTbl(ps)) -> match toml.pairs_get(ps, "paths") {
+      Some(TArr(xs)) -> xs || (x => match x { TStr(s) -> [s]; _ -> [] })
+      _              -> []
+    }
+    _ -> []
+  }
+  Err(_) -> []
+}
+
+fn remember(path: String) : Unit / Desktop + File + Ffi = {
+  let paths = [path, ...(recent() |? (p => p != path))] |> list.take(10)
+  project.write_atomic("#{data_home()}/recent.toml", toml.encode(TTbl([("paths", TArr(paths | (p => TStr(p))))]))) |> ignore
+}
+
+fn open_at(path: String) : Result[JsonValue, String] / Desktop + File + Ffi =
+  match project.with_project(path, () => commands.load()) {
+    Err(e) -> Err(e)
+    Ok(b)  -> {
+      remember(path)
+      Desktop.serve_files(path)
+      Ok(JObj([("path", JStr(path)), ("book", model.book_json(b))]))
+    }
+  }
+
+fn create_at(path: String, title: String, author: String) : Result[JsonValue, String] / Desktop + File + Ffi + SecureRandom = {
+  let root = if string.ends_with(path, ".book") { path } else { "#{path}.book" }
+  if file.exists(root) {
+    Err("#{root} already exists")
+  } else {
+    dir.create_dir(root) |> ignore
+    match project.with_project(root, () => commands.create(title, author)) {
+      Err(e) -> Err(e)
+      Ok(_)  -> open_at(root)
+    }
+  }
+}
+
+fn base_name(path: String) : String = match string.last_index_of(path, "/") {
+  Some(i) -> string.byte_slice(path, i + 1, string.byte_length(path) - i - 1) ?? path
+  None    -> path
+}
+
+# --- commands ---
+
+fn in_project(c: Call) : Result[JsonValue, String] / Project + File + Clock + SecureRandom = match c.cmd {
+  "load"         -> match commands.load() { Ok(b) -> Ok(model.book_json(b)); Err(e) -> Err(e) }
+  "stats"        -> commands.stats()
+  "add"          -> commands.add(arg_text(c, "parent"), arg_text(c, "kind"), arg_text(c, "title"), arg_int(c, "index"))
+  "rename"       -> commands.rename(arg_text(c, "id"), arg_text(c, "title"))
+  "move"         -> commands.move(arg_text(c, "id"), arg_text(c, "parent"), arg_int(c, "index"))
+  "empty-trash"  -> commands.empty_trash()
+  "read"         -> commands.read(arg_text(c, "id"))
+  "save"         -> commands.save(arg_text(c, "id"), model.meta_from(app.arg(c, "meta")), arg_text(c, "body"))
+  "save-notes"   -> commands.save_notes(arg_text(c, "id"), arg_text(c, "text"))
+  "snapshot"     -> commands.snapshot(arg_text(c, "id"))
+  "snapshots"    -> commands.snapshots(arg_text(c, "id"))
+  "snapshot-body" -> commands.snapshot_body(arg_text(c, "id"), arg_text(c, "name"))
+  "restore"      -> commands.restore(arg_text(c, "id"), arg_text(c, "name"))
+  "search"       -> commands.find(arg_text(c, "query"))
+  "import"       -> commands.import_files(arg_strings(c, "paths"))
+  "save-book"    -> commands.save_book(app.arg(c, "book"))
+  other          -> Err("unknown command #{other}")
+}
+
+fn command(c: Call) : Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + File + Ffi + Clock + SecureRandom = match c.cmd {
+  "recent"      -> Ok(JArr(recent() |? (p => file.exists("#{p}/project.toml")) | (p => JStr(p))))
+  "open"        -> open_at(arg_text(c, "path"))
+  "pick-open"   -> match Dialog.open_folder(c.win, "Open a book project (a .book folder)") {
+    Some(p) -> open_at(p)
+    None    -> Ok(JNull)
+  }
+  "pick-create" -> match Dialog.save_file(c.win, "Create a book project", "Untitled.book") {
+    Some(p) -> create_at(p, string.drop_suffix(base_name(p), ".book") ?? base_name(p), arg_text(c, "author"))
+    None    -> Ok(JNull)
+  }
+  "create"      -> create_at(arg_text(c, "path"), arg_text(c, "title"), arg_text(c, "author"))
+  "close-window" -> { Desktop.close_window(c.win); Ok(JNull) }
+  "fullscreen"  -> { Desktop.set_fullscreen(c.win, json.as_bool(app.arg(c, "on")) ?? false); Ok(JNull) }
+  "reveal"      -> { Shell.reveal_path(arg_text(c, "path")); Ok(JNull) }
+  "open-file"   -> { Shell.open_path(arg_text(c, "path")); Ok(JNull) }
+  _             -> match app.arg_string(c, "root") {
+    Some(root) -> project.with_project(root, () => in_project(c))
+    None       -> Err("no project open")
+  }
+}
+
+# --- events: the page decides when it is safe to close ---
+
+fn on_event(ev: Event) : Unit / Desktop = match ev {
+  CloseRequested(win)   -> Desktop.emit(win, "close-requested", JNull)
+  QuitRequested         -> Desktop.emit(1, "close-requested", JNull)
+  MenuItem(id)          -> Desktop.emit(1, "menu", JStr(id))
+  FilesDropped(win, ps) -> Desktop.emit(win, "files-dropped", JArr(ps | (p => JStr(p))))
+  _                     -> ()
+}
+
+fn menus() : [Menu] = [
+  Menu { title: "File", items: [
+    Item("new-project", "New Project…", "n"), Item("open-project", "Open Project…", "o"), Separator,
+    Item("new-doc", "New Document", "N"), Item("new-folder", "New Folder", ""), Separator,
+    Item("snapshot", "Take Snapshot", "5"), Item("compile", "Compile…", "E"), Separator,
+    Item("close-window", "Close", "w"),
+  ] },
+  menu.edit_menu(),
+  Menu { title: "View", items: [
+    Item("view-editor", "Editor", "1"), Item("view-corkboard", "Corkboard", "2"), Item("view-outliner", "Outliner", "3"),
+    Separator, Item("scrivenings", "Scrivenings", "4"), Item("split", "Split Editor", "\\"),
+    Separator, Item("composition", "Composition Mode", "F"), Item("find", "Search Project", "F"),
+    Item("inspector", "Inspector", "i"),
+  ] },
+  Menu { title: "Project", items: [
+    Item("targets", "Targets…", "T"), Item("book-settings", "Book Settings…", ""), Separator,
+    Item("empty-trash", "Empty Trash", ""),
+  ] },
+]
+
+fn main() : Int / Spawn + Ffi + File + Stdout + Env + Clock + SecureRandom = {
+  let cfg = Config {
+    name: "Book", assets: "examples/book/assets", page: env.get("MOTU_PAGE") ?? "index.html",
+    title: "Book", width: 1280, height: 820, menus: menus(),
+  }
+  app.run(cfg, c => command(c), ev => on_event(ev))
+}
+
+extern "C" fn motu_on_message(ud: Userdata, win: Int, json: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, PageMessage(win, json))
+}
+
+extern "C" fn motu_on_window_event(ud: Userdata, win: Int, kind: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, WindowEvent(win, kind))
+}
+
+extern "C" fn motu_on_menu(ud: Userdata, id: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, MenuChosen(id))
+}
+
+extern "C" fn motu_on_drop(ud: Userdata, win: Int, paths: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, Dropped(win, paths))
+}
+
+extern "C" fn motu_on_reply(ud: Userdata, json: String) : Unit = {
+  let pid: Pid[String] = take_userdata(ud)
+  mailbox_send(pid, json)
+}

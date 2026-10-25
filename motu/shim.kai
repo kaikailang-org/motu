@@ -14,6 +14,7 @@ extern "C" pub fn motu_init(ud: Userdata, app_name: String) : Unit / Ffi
 extern "C" pub fn motu_run() : Unit / Ffi
 extern "C" pub fn motu_quit() : Unit / Ffi
 extern "C" pub fn motu_set_asset_root(root: String) : Unit / Ffi
+extern "C" pub fn motu_set_files_root(root: String) : Unit / Ffi
 
 extern "C" pub fn motu_window_new(title: String, width: Int, height: Int) : Int / Ffi
 extern "C" pub fn motu_window_load(win: Int, url: String) : Unit / Ffi

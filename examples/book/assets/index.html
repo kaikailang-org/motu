@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Book</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<section id="welcome" class="hidden">
+  <h1>Book</h1>
+  <div class="muted">A writing studio for long books. Every document is a Markdown file.</div>
+  <div class="actions">
+    <button id="w-new">New Project…</button>
+    <button id="w-open">Open Project…</button>
+  </div>
+  <h3 class="muted" id="recent-title">Recent</h3>
+  <ul id="recent"></ul>
+</section>
+
+<section id="workspace" class="hidden">
+  <div id="toolbar">
+    <div class="group">
+      <button data-view="editor" class="on" title="Editor (⌘1)">Editor</button>
+      <button data-view="corkboard" title="Corkboard (⌘2)">Corkboard</button>
+      <button data-view="outliner" title="Outliner (⌘3)">Outliner</button>
+    </div>
+    <button id="t-scrivenings" title="Read the selected folder as one text (⌘4)">Scrivenings</button>
+    <button id="t-split" title="Split editor (⌘\)">Split</button>
+    <button id="t-compose" title="Composition mode (⇧⌘F)">Compose</button>
+    <span class="grow"></span>
+    <span id="targets"></span>
+    <input type="search" id="t-search" placeholder="Search project">
+    <button id="t-inspector" class="on" title="Inspector (⌘I)">Inspector</button>
+    <button id="t-compile" title="Compile (⇧⌘E)">Compile…</button>
+  </div>
+  <div id="body">
+    <nav id="binder">
+      <div id="tree"></div>
+      <footer>
+        <button id="b-doc" title="New document (⇧⌘N)">＋ Doc</button>
+        <button id="b-folder" title="New folder">＋ Folder</button>
+        <button id="b-trash" title="Move to trash">Trash</button>
+      </footer>
+    </nav>
+    <main id="main"></main>
+    <aside id="inspector">
+      <div class="empty">Select a document</div>
+    </aside>
+  </div>
+</section>
+
+<div id="composition-bar"><span id="cb-words"></span><span>Esc to leave</span></div>
+
+<dialog id="d-compile">
+  <h3>Compile</h3>
+  <label>Format
+    <select id="c-format">
+      <option value="epub">EPUB 3</option>
+      <option value="docx">Word (DOCX)</option>
+      <option value="pdf">PDF</option>
+      <option value="html">HTML</option>
+      <option value="md">Markdown</option>
+    </select>
+  </label>
+  <label><span><input type="checkbox" id="c-titles" checked> Chapter titles from the binder</span></label>
+  <label><span><input type="checkbox" id="c-title-page" checked> Title page</span></label>
+  <progress id="compile-progress" class="hidden" value="0" max="1"></progress>
+  <div id="c-status" class="muted"></div>
+  <div class="row"><button id="c-cancel">Cancel</button><button id="c-go">Compile…</button></div>
+</dialog>
+
+<dialog id="d-settings">
+  <h3>Book settings</h3>
+  <label>Title <input id="s-title"></label>
+  <label>Author <input id="s-author"></label>
+  <label>Language <input id="s-language" placeholder="en"></label>
+  <label>Manuscript target (words) <input id="s-target" type="number" min="0" step="1000"></label>
+  <label>Session target (words) <input id="s-session" type="number" min="0" step="100"></label>
+  <div class="row"><button id="s-cancel">Cancel</button><button id="s-save">Save</button></div>
+</dialog>
+
+<dialog id="d-snapshot">
+  <h3 id="sn-title">Snapshot</h3>
+  <pre id="sn-body"></pre>
+  <div class="row"><button id="sn-close">Close</button><button id="sn-restore">Restore this version</button></div>
+</dialog>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

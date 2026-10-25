@@ -24,6 +24,8 @@ void motu_run(void);
 void motu_quit(void);
 /* Files under `root` are served as motu://app/<path>. */
 void motu_set_asset_root(const char *root);
+/* [any] Files under `root` are served as motu://files/<path>; "" serves none. */
+void motu_set_files_root(const char *root);
 
 /* --- windows --- */
 

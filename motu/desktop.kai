@@ -9,7 +9,7 @@ import encoding.json
 import encoding.json_bind
 import motu.shim
 
-#[doc("Windows, events to the page, menu state, printing and the application's own lifetime.")]
+#[doc("Windows, events to the page, menu state, printing, the files served as motu://files/, and the application's own lifetime.")]
 pub effect Desktop {
   emit(win: Int, name: String, data: JsonValue) : Unit
   open_window(title: String, width: Int, height: Int, page: String) : Int
@@ -21,6 +21,7 @@ pub effect Desktop {
   set_menu_state(id: String, enabled: Bool, checked: Bool) : Unit
   print_pdf(url: String, out_path: String) : Bool
   data_dir() : String
+  serve_files(root: String) : Unit
   quit() : Unit
 }
 
@@ -125,6 +126,7 @@ pub fn with_desktop[r, e](body: () -> r / Desktop + Dialog + Shell + Clipboard +
           set_menu_state(id, on, checked, resume)  -> resume(menu_state(id, on, checked))
           print_pdf(url, out, resume)              -> resume(print_to(url, out))
           data_dir(resume)                         -> resume(shim.motu_data_dir())
+          serve_files(root, resume)                -> resume(shim.motu_set_files_root(root))
           quit(resume)                             -> resume(shim.motu_quit())
         }
       } with Dialog {
