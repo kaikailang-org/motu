@@ -154,9 +154,7 @@ int main(void) {
   motu_set_files_root(g_dir);
   motu_menu_begin("File");
   motu_menu_item("custom", "Custom", "k", 0);
-  motu_menu_item("check", "Check", "K", 0);
-  motu_menu_separator();
-  motu_menu_item("quit", "Quit", "q", 0);
+  motu_menu_item("check", "Check", "K", MOTU_MENU_CHECKABLE);
   motu_menu_end();
   motu_menu_install();
   g_win = motu_window_new("smoke", 640, 400);

@@ -20,7 +20,7 @@ pub type Menu = { title: String, items: [MenuItem] }
 
 fn put(item: MenuItem) : Unit / Ffi = match item {
   Item(id, title, key)        -> shim.motu_menu_item(id, title, key, 0)
-  Checked(id, title, key, on) -> shim.motu_menu_item(id, title, key, if on { 2 } else { 0 })
+  Checked(id, title, key, on) -> shim.motu_menu_item(id, title, key, if on { 6 } else { 4 })
   Disabled(id, title, key)    -> shim.motu_menu_item(id, title, key, 1)
   Separator                   -> shim.motu_menu_separator()
   Submenu(title, items)       -> {
@@ -30,7 +30,7 @@ fn put(item: MenuItem) : Unit / Ffi = match item {
   }
 }
 
-#[doc("Replaces the menu bar with `menus`; on macOS the application menu stays first.")]
+#[doc("Replaces the menu bar with `menus`; macOS keeps its application menu first, and Linux adds Quit to the first menu when no item has the id `quit`.")]
 pub fn install(menus: [Menu]) : Unit / Ffi = {
   menus |! (m => put(Submenu(m.title, m.items)))
   shim.motu_menu_install()
