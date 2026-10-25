@@ -23,6 +23,7 @@ jobs:
           kai build examples/book/main.kai -o build/book
 
       - name: Start to first paint; the first launch finds WebKit cold on this fresh machine
+        id: launch
         run: |
           for i in 1 2 3 4; do
             t0=$(python3 -c 'import time; print(time.time_ns())')
@@ -36,3 +37,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/book"
           MOTU_PAGE="index.html#selftest=$RUNNER_TEMP/book" perl -e "alarm 120; exec @ARGV" ./build/book | tee book.txt
           ! grep -E '^FAIL' book.txt
+
+      - name: Backtrace
+        if: failure()
+        run: |
+          MOTU_PAGE='index.html#ready' lldb --batch -o run -o 'thread backtrace all' -k 'thread backtrace all' -k quit ./build/hello 2>&1 | tail -120
