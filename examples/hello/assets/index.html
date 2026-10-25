@@ -25,7 +25,10 @@
       document.getElementById('out').textContent = 'error: ' + e.message;
     }
   };
-  if (location.hash === '#ready') motu.invoke('motu.report', 'ready');
+  if (location.hash === '#ready') new PerformanceObserver((list) => {
+    const fcp = list.getEntries().find((e) => e.name === 'first-contentful-paint');
+    if (fcp) motu.invoke('motu.report', `first paint ${fcp.startTime.toFixed(0)} ms after the page started`);
+  }).observe({ type: 'paint', buffered: true });
   if (location.hash === '#selftest') (async () => {
     const hi = await motu.invoke('greet', { name: 'selftest' });
     const n = 2000; const t0 = performance.now();

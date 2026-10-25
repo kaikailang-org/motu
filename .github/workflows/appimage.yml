@@ -41,6 +41,15 @@ jobs:
           ls -l "$RUNNER_TEMP"/greeter/build/*.AppImage "$RUNNER_TEMP"/studio/build/*.AppImage
           file "$RUNNER_TEMP"/greeter/build/greeter-x86_64.AppImage
 
+      - name: Start to first paint, first launch on this runner
+        run: |
+          cd /
+          for i in 1 2 3; do
+            t0=$(date +%s%N)
+            MOTU_PAGE='index.html#ready' xvfb-run -a timeout 60 "$RUNNER_TEMP/greeter/build/greeter-x86_64.AppImage"
+            echo "launch $i: $(( ($(date +%s%N) - t0) / 1000000 )) ms, Xvfb start included"
+          done
+
       - name: Run the AppImages from another directory
         run: |
           cd /
