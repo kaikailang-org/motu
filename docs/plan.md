@@ -82,14 +82,26 @@ at run time. kaikai already has that boundary in the type system.
   macOS, C over GTK 4 and WebKitGTK 6.0 on Linux. Everything above the shim is
   kaikai.
 
-### Measured so far (macOS, arm64, native backend)
+### Measured so far
 
-- Empty command round trip, page → kaikai fiber → page: 106–122 µs over 2 000 calls (M).
-- A command sleeping 5 s, cancelled by the page after 50 ms: rejected after 52 ms (M).
-- Print to PDF through the webview: an 18-page paginated file from three chapters (M).
-- A Markdown page and a binary file's line sent through the channel: invalid UTF-8 is
-  repaired with U+FFFD in the shim, because WebKit drops a script that is not valid
-  UTF-8 (M).
+macOS, Apple M4 Pro, native backend:
+
+- Empty command round trip, page → kaikai fiber → page: 106–124 µs over 2 000 calls (M).
+- A command sleeping 5 s, cancelled by the page after 50 ms: rejected after 51–53 ms (M).
+- Print to PDF through the webview: 18 pages from three chapters, 12 from a 3 420-word
+  chapter with footnotes (M).
+- Markdown parse and render of 150 000 words: 28 ms native, 16 ms on the C backend (M).
+
+Linux, GitHub `ubuntu-24.04` runner under Xvfb, native backend:
+
+- Empty command round trip: 343–610 µs (M); GTK runs on a thread of its own there
+  (JavaScriptCore refuses a stack it does not own), so each call crosses one more queue.
+- Every example's self-test passes, the book application included (M).
+
+Both:
+
+- Invalid UTF-8 sent to the page is repaired with U+FFFD in the shim, because WebKit
+  drops a script that is not valid UTF-8 (M).
 
 ### Why an own shim, not `webview/webview`
 
@@ -311,7 +323,7 @@ can own the state behind it.
 |---|---|---|
 | C calls kaikai (`extern "C"` with a body), from a GUI thread too | kaikai | shipped (R); verified in stage 0 |
 | Objective-C sources and macOS frameworks in `[native]` | kaikai | not needed: the shims are C over the Objective-C runtime and load their frameworks with `dlopen` (M) |
-| `extern "C"` exports declared in an imported module of a package | kaikai | missing at link today (M); fix in progress |
+| `extern "C"` exports declared in an imported module of a package | kaikai | missing at link today (M); fixed in lnds/kaikai#3164, examples carry the callbacks until a release ships it |
 | zip writer (stored + CRC-32; deflate) | kaikai stdlib | missing |
 | flush a file to disk (`fsync`) for atomic saves | Motu shim | `motu_fsync_path` (`F_FULLFSYNC` on macOS) |
 | XML writer | kaikai stdlib or Motu | missing |
