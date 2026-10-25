@@ -8,7 +8,7 @@ JavaScript served from the application's `assets/` directory as
 
 ```sh
 kai build tools/motu/main.kai -o build/motu      # once, from this repository
-build/motu new ~/src/notes --template notes      # hello, md-viewer, file-finder, notes, book
+build/motu new ~/src/notes --template notes      # hello, md-viewer, md-to-epub, file-finder, notes, book
 build/motu dev ~/src/notes                       # build, run, rebuild and restart on every save
 build/motu build ~/src/notes                     # macOS: build/notes.app; Linux: build/notes-linux/ and a tarball
 ```

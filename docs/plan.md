@@ -249,7 +249,7 @@ capability, and they are what `motu new` offers as templates.
 | `md-viewer` | open or drop a Markdown file, read it rendered, reload, print to PDF | menus, dialogs, file drop, appearance, Markdown parser, PDF | 2, 5 |
 | `file-finder` | pick a folder, find files by name and content as you type, open or reveal a result | streamed results, cancellation on each keystroke, `motu.shell` | 3 |
 | `notes` | a folder of Markdown notes with autosave and full-text search | `Project` confinement, atomic writes, autosave, in-memory search | 4 |
-| `md-to-epub` | a folder of chapters out as EPUB and DOCX, with a progress bar | compile pipeline, zip and XML writers, progress events | 5 |
+| `md-to-epub` | Markdown files as chapters, out as EPUB and DOCX, with a progress bar | compile pipeline, zip and XML writers, progress events | 5 |
 | `book` | the Scrivener-class studio above | all of stage 1 | 7 |
 
 ### Milestones
@@ -269,7 +269,9 @@ capability, and they are what `motu new` offers as templates.
    HTML, EPUB 3, DOCX, and PDF through the webview. Closes with `md-to-epub`
    and `md-viewer` rendering.
 6. **Tooling.** `motu new` (from the examples above), `motu dev`, `motu
-   build`, the macOS bundle and the Linux AppImage.
+   build`, the macOS bundle and a Linux directory with its tarball. Not an
+   AppImage: the shim loads the system's GTK and WebKitGTK, which an AppImage
+   would not carry either, so it would add a tool and gain nothing.
 7. **The application.** `examples/book` complete, and the measurements above.
 
 ### Where the book application lives

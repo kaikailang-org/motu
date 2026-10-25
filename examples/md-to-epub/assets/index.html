@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Markdown to EPUB</title>
+<style>
+  :root { color-scheme: light dark; --muted: #888; --line: #8884; --sel: #3a6ea52b; }
+  body { margin: 0; font: 14px/1.45 -apple-system, system-ui, sans-serif; display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+  form { display: grid; grid-template-columns: 1fr 1fr 6rem; gap: .5rem; padding: .8rem; border-bottom: 1px solid var(--line); }
+  label { display: flex; flex-direction: column; gap: .2rem; font-size: .8rem; color: var(--muted); }
+  input { font: inherit; padding: .3rem .5rem; border: 1px solid var(--line); border-radius: 6px; background: Canvas; color: CanvasText; }
+  ol { margin: 0; padding: .5rem .8rem .5rem 2.4rem; overflow: auto; }
+  li { padding: .35rem .4rem; border-radius: 6px; }
+  li:hover { background: var(--sel); }
+  li .row { display: flex; gap: .5rem; align-items: center; }
+  li .t { flex: 1; font-weight: 600; }
+  li .p, li .w { color: var(--muted); font-size: .8rem; }
+  li button { font-size: .75rem; padding: 0 .35rem; }
+  .hidden { display: none; }
+  .empty { color: var(--muted); text-align: center; margin-top: 15vh; list-style: none; }
+  footer { display: flex; gap: .5rem; align-items: center; padding: .6rem .8rem; border-top: 1px solid var(--line); }
+  footer .grow { flex: 1; color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<form id="meta" onsubmit="return false">
+  <label>Title<input id="title" value="Untitled"></label>
+  <label>Author<input id="author"></label>
+  <label>Language<input id="language" value="en"></label>
+</form>
+<ol id="list"></ol>
+<footer>
+  <button id="add">Add files…</button><button id="cover">Cover…</button>
+  <span class="grow" id="status"></span><progress id="progress" class="hidden" value="0" max="1"></progress>
+  <button id="make-docx">Word…</button><button id="make">Make EPUB…</button>
+</footer>
+<script>
+  const S = { files: [], cover: '' };
+  const $ = (id) => document.getElementById(id);
+  const status = (t) => { $('status').textContent = t; };
+  const render = () => {
+    const ol = $('list');
+    ol.replaceChildren();
+    if (!S.files.length) { ol.innerHTML = '<li class="empty">Add Markdown files, or drop them here. Each file becomes a chapter.</li>'; return; }
+    S.files.forEach((f, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = '<div class="row"><span class="t"></span><span class="w"></span><button data-d="-1">↑</button><button data-d="1">↓</button><button data-d="x">✕</button></div><div class="p"></div>';
+      li.querySelector('.t').textContent = f.title;
+      li.querySelector('.w').textContent = `${f.words} words`;
+      li.querySelector('.p').textContent = f.path;
+      li.onclick = (e) => {
+        const d = e.target.dataset.d;
+        if (!d) return;
+        if (d === 'x') S.files.splice(i, 1);
+        else { const j = i + Number(d); if (j >= 0 && j < S.files.length) [S.files[i], S.files[j]] = [S.files[j], S.files[i]]; }
+        render();
+      };
+      ol.appendChild(li);
+    });
+    const words = S.files.reduce((n, f) => n + f.words, 0);
+    status(`${S.files.length} chapters, ${words} words${S.cover ? ' · cover ' + S.cover.split('/').pop() : ''}`);
+  };
+  const append = (fs) => { for (const f of fs || []) if (!S.files.some((g) => g.path === f.path)) S.files.push(f); render(); };
+  motu.on('progress', (p) => { const bar = $('progress'); bar.classList.remove('hidden'); bar.max = p.total; bar.value = p.done; });
+  const make = async (out, format) => {
+    if (!S.files.length) { status('Add at least one file'); return null; }
+    try {
+      const r = await motu.invoke('make', { title: $('title').value, author: $('author').value, language: $('language').value,
+        files: S.files.map((f) => f.path), cover: S.cover, out, format });
+      if (r) status(`Wrote ${r}`);
+      return r;
+    } catch (e) { status(e.message); return null; }
+    finally { $('progress').classList.add('hidden'); }
+  };
+  const actions = {
+    add: async () => append(await motu.invoke('add')),
+    cover: async () => { S.cover = (await motu.invoke('cover')) || S.cover; render(); },
+    make: () => make(undefined, 'epub'),
+    'make-docx': () => make(undefined, 'docx'),
+  };
+  for (const id of Object.keys(actions)) $(id).onclick = actions[id];
+  motu.on('menu', (id) => actions[id] && actions[id]());
+  motu.on('dropped', async (paths) => append(await motu.invoke('files', { paths: paths.filter((p) => /\.(md|markdown|txt)$/i.test(p)) })));
+  render();
+  if (location.hash.startsWith('#selftest=')) (async () => {
+    const [list, cover, out] = decodeURIComponent(location.hash.slice(10)).split('|');
+    let steps = 0;
+    motu.on('progress', () => { steps += 1; });
+    append(await motu.invoke('files', { paths: list.split(',') }));
+    S.files.reverse(); render();
+    S.cover = cover;
+    $('title').value = 'Selftest'; $('author').value = 'Motu';
+    await make(out, 'epub');
+    const epubLine = $('status').textContent;
+    await make(out.replace(/\.epub$/, '.docx'), 'docx');
+    await motu.invoke('motu.report', `chapters=${S.files.map((f) => f.title).join(' / ')} | progress=${steps} | ${epubLine} | ${$('status').textContent}`);
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,194 @@
+import ffi
+import fs.file
+import os.env
+import time
+import encoding.hex
+import encoding.json
+import encoding.json_bind
+import encoding.toml
+import random_secure
+import motu.app
+import motu.desktop
+import motu.docx
+import motu.zip
+import motu.epub
+import motu.markdown
+import motu.markdown_html
+import motu.markdown_text
+import motu.menu
+import motu.shim
+
+fn base_name(path: String) : String = match string.last_index_of(path, "/") {
+  Some(i) -> string.byte_slice(path, i + 1, string.byte_length(path) - i - 1) ?? path
+  None    -> path
+}
+
+fn stem(path: String) : String = match string.last_index_of(base_name(path), ".") {
+  Some(i) -> string.byte_slice(base_name(path), 0, i) ?? base_name(path)
+  None    -> base_name(path)
+}
+
+fn first_heading(blocks: [Block]) : Option[String] = match blocks {
+  [Heading(_, xs), ..._] -> Some(markdown_text.inlines_text(xs))
+  [_, ...rest]           -> first_heading(rest)
+  []                     -> None
+}
+
+# The chapter title: the front matter's `title`, else the first heading, else the file name.
+fn title_of(path: String, text: String) : String = {
+  let declared = match markdown.front_matter(text) {
+    Ok(TTbl(ps)) -> match toml.pairs_get(ps, "title") { Some(TStr(s)) -> Some(s); _ -> None }
+    _            -> None
+  }
+  declared ?? (first_heading(markdown.parse(markdown.split_front_matter(text).snd).blocks) ?? stem(path))
+}
+
+fn describe(path: String) : List[JsonValue] / File = match read_file(path) {
+  Err(_)   -> []
+  Ok(text) -> [JObj([
+    ("path", JStr(path)),
+    ("title", JStr(title_of(path, text))),
+    ("words", JNum(markdown_text.word_count(markdown.split_front_matter(text).snd))),
+  ])]
+}
+
+fn chapter(path: String) : Result[Chapter, String] / File = match read_file(path) {
+  Err(e)   -> Err("#{path}: #{e}")
+  Ok(text) -> {
+    let body = markdown.split_front_matter(text).snd
+    let doc = markdown.parse(body)
+    # The builder writes the title as the chapter's h1, so a leading h1 is dropped here.
+    let blocks = match doc.blocks { [Heading(1, _), ...rest] -> rest; all -> all }
+    Ok(Chapter { title: title_of(path, text), body: markdown_html.to_html(Doc { blocks }) })
+  }
+}
+
+fn chapters(win: Int, paths: [String], done: Int, total: Int) : Result[[Chapter], String] / Desktop + File = match paths {
+  []           -> Ok([])
+  [p, ...rest] -> match chapter(p) {
+    Err(e) -> Err(e)
+    Ok(c)  -> {
+      Desktop.emit(win, "progress", JObj([("done", JNum(done + 1)), ("total", JNum(total))]))
+      match chapters(win, rest, done + 1, total) { Ok(cs) -> Ok([c, ...cs]); Err(e) -> Err(e) }
+    }
+  }
+}
+
+# Word gets one Markdown text: each chapter's title as a heading, then its body.
+fn manuscript(win: Int, paths: [String]) : Result[String, String] / Desktop + File = {
+  let total = list.length(paths)
+  let pieces = list.enumerate(paths) | (ip => {
+    Desktop.emit(win, "progress", JObj([("done", JNum(ip.fst + 1)), ("total", JNum(total))]))
+    match read_file(ip.snd) {
+      Err(e)   -> Err("#{ip.snd}: #{e}")
+      Ok(text) -> {
+        let body = markdown.split_front_matter(text).snd
+        let blocks = markdown.parse(body).blocks
+        let rest = match blocks { [Heading(1, _), ..._] -> string.drop_prefix(string.trim_left(body), first_line(string.trim_left(body))) ?? body; _ -> body }
+        Ok("# #{title_of(ip.snd, text)}\n\n#{rest}\n\n")
+      }
+    }
+  })
+  match pieces |? (r => match r { Err(_) -> true; Ok(_) -> false }) {
+    [Err(e), ..._] -> Err(e)
+    _              -> Ok(string.join(pieces || (r => match r { Ok(t) -> [t]; Err(_) -> [] }), ""))
+  }
+}
+
+fn first_line(s: String) : String = match string.index_of(s, "\n") {
+  Some(i) -> string.byte_slice(s, 0, i + 1) ?? s
+  None    -> s
+}
+
+fn cover(path: String) : Result[Option[Array[Byte]], String] / File =
+  if path == "" { Ok(None) } else {
+    match file.read_bytes(path) {
+      Err(e) -> Err("cover: #{e}")
+      Ok(b)  -> match epub.image_type(b) { Some(_) -> Ok(Some(b)); None -> Err("the cover must be PNG, JPEG, GIF or WebP") }
+    }
+  }
+
+fn strings(v: JsonValue) : [String] = match v {
+  JArr(xs) -> xs || (x => match x { JStr(s) -> [s]; _ -> [] })
+  _        -> []
+}
+
+fn make(c: Call) : Result[JsonValue, String] / Desktop + Dialog + File + Clock + SecureRandom = {
+  let title = app.arg_string(c, "title") ?? "Untitled"
+  let ext = if app.arg_string(c, "format") == Some("docx") { "docx" } else { "epub" }
+  let out = app.arg_string(c, "out") ?? (Dialog.save_file(c.win, "Save the book", "#{title}.#{ext}") ?? "")
+  if out == "" { Ok(JNull) } else {
+    let lang = app.arg_string(c, "language") ?? ""
+    let meta = Metadata {
+      title, author: app.arg_string(c, "author") ?? "", language: if lang == "" { "en" } else { lang },
+      identifier: "urn:motu:#{hex.encode(random_secure.bytes(16))}", date: time.now(),
+    }
+    let files = strings(json.get(c.args, "files"))
+    let made = if string.ends_with(out, ".docx") {
+      match manuscript(c.win, files) {
+        Err(e) -> Err(e)
+        Ok(md) -> zip.write_file(out, docx.parts(Info { title, author: meta.author, language: meta.language }, markdown.parse(md)) | (p => zip.text(p.fst, p.snd, Deflated, meta.date)))
+      }
+    } else {
+      match chapters(c.win, files, 0, list.length(files)) {
+        Err(e) -> Err(e)
+        Ok(cs) -> match cover(app.arg_string(c, "cover") ?? "") {
+          Err(e) -> Err(e)
+          Ok(img) -> epub.write_file(out, Book { ...epub.book(meta, cs), cover: img })
+        }
+      }
+    }
+    match made { Ok(_) -> Ok(JStr(out)); Err(e) -> Err(e) }
+  }
+}
+
+fn command(c: Call) : Result[JsonValue, String] / Desktop + Dialog + File + Clock + SecureRandom = match c.cmd {
+  "add"   -> Ok(JArr(Dialog.open_files(c.win, "Add Markdown files", ["md", "markdown", "txt"], true) || (p => describe(p))))
+  "files" -> Ok(JArr(strings(json.get(c.args, "paths")) || (p => describe(p))))
+  "cover" -> Ok(match Dialog.open_files(c.win, "Choose a cover image", ["png", "jpg", "jpeg", "gif", "webp"], false) { [p, ..._] -> JStr(p); [] -> JNull })
+  "make"  -> make(c)
+  other   -> Err("unknown command #{other}")
+}
+
+fn on_event(ev: Event) : Unit / Desktop = match ev {
+  FilesDropped(win, ps) -> Desktop.emit(win, "dropped", JArr(ps | (p => JStr(p))))
+  MenuItem(id)          -> Desktop.emit(1, "menu", JStr(id))
+  other                 -> app.default_event(other)
+}
+
+fn main() : Int / Spawn + Ffi + File + Stdout + Env + Clock + SecureRandom = {
+  let cfg = Config {
+    name: "Markdown to EPUB", assets: "examples/md-to-epub/assets", page: env.get("MOTU_PAGE") ?? "index.html",
+    title: "Markdown to EPUB", width: 760, height: 620,
+    menus: [
+      Menu { title: "File", items: [Item("add", "Add Files…", "o"), Item("make", "Make EPUB…", "e"), Item("make-docx", "Make Word Document…", "E"), Separator, Item("close-window", "Close", "w")] },
+      menu.edit_menu(),
+    ],
+  }
+  app.run(cfg, c => command(c), ev => on_event(ev))
+}
+
+extern "C" fn motu_on_message(ud: Userdata, win: Int, json: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, PageMessage(win, json))
+}
+
+extern "C" fn motu_on_window_event(ud: Userdata, win: Int, kind: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, WindowEvent(win, kind))
+}
+
+extern "C" fn motu_on_menu(ud: Userdata, id: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, MenuChosen(id))
+}
+
+extern "C" fn motu_on_drop(ud: Userdata, win: Int, paths: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, Dropped(win, paths))
+}
+
+extern "C" fn motu_on_reply(ud: Userdata, json: String) : Unit = {
+  let pid: Pid[String] = take_userdata(ud)
+  mailbox_send(pid, json)
+}

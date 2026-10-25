@@ -5,10 +5,11 @@ kaikai backend and a user interface drawn by the system webview, in one
 process. Tauri-shaped: the operating system ships the browser engine, so an
 application does not bundle one.
 
-> **Status:** stage 1 in progress on macOS; the Linux shim is in review. The
-> plan is [`docs/plan.md`](docs/plan.md), the user guide [`docs/guide.md`](docs/guide.md).
-> Examples: `hello`, `md-viewer`, `file-finder`, `notes`, and `book`, the
-> Scrivener-class writing studio.
+> **Status:** stage 1 runs on macOS and Linux; CI builds every example on
+> Linux and runs its self-test. The plan is [`docs/plan.md`](docs/plan.md), the
+> user guide [`docs/guide.md`](docs/guide.md). Examples: `hello`, `md-viewer`,
+> `md-to-epub`, `file-finder`, `notes`, and `book`, the Scrivener-class writing
+> studio.
 
 What sets it apart:
 
