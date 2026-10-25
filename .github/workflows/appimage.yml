@@ -1,0 +1,52 @@
+name: appimage
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  appimage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK 4, WebKitGTK 6.0 and Xvfb
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libgtk-4-1 libwebkitgtk-6.0-4 xvfb file
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Install kai and appimagetool
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/kaikailang-org/kaikai/main/install.sh | sh
+          echo "$HOME/.kaikai/bin" >> "$GITHUB_PATH"
+          mkdir -p build
+          curl -fsSL -o build/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x build/appimagetool
+
+      - name: motu new and motu build
+        run: |
+          kai build tools/motu/main.kai -o build/motu
+          build/motu new "$RUNNER_TEMP/greeter" --template hello
+          build/motu new "$RUNNER_TEMP/studio" --template book
+          (cd "$RUNNER_TEMP/greeter" && "$GITHUB_WORKSPACE/build/motu" build)
+          (cd "$RUNNER_TEMP/studio" && "$GITHUB_WORKSPACE/build/motu" build)
+          ls -l "$RUNNER_TEMP"/greeter/build/*.AppImage "$RUNNER_TEMP"/studio/build/*.AppImage
+          file "$RUNNER_TEMP"/greeter/build/greeter-x86_64.AppImage
+
+      - name: Run the AppImages from another directory
+        run: |
+          cd /
+          MOTU_PAGE='index.html#selftest' xvfb-run -a timeout 60 "$RUNNER_TEMP/greeter/build/greeter-x86_64.AppImage" | tee "$RUNNER_TEMP/greeter.txt"
+          grep -E '^Hello, selftest, from kaikai \| 2000 pings' "$RUNNER_TEMP/greeter.txt"
+          mkdir -p "$RUNNER_TEMP/book"
+          MOTU_PAGE="index.html#selftest=$RUNNER_TEMP/book" xvfb-run -a timeout 120 "$RUNNER_TEMP/studio/build/studio-x86_64.AppImage" | tee "$RUNNER_TEMP/studio.txt"
+          grep -q '^ok compile epub' "$RUNNER_TEMP/studio.txt"
+          ! grep -E '^FAIL' "$RUNNER_TEMP/studio.txt"

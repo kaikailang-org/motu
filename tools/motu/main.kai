@@ -3,7 +3,7 @@
 
   motu new <dir> [--template <name>]   a new application from an example
   motu dev [<dir>]                     build, run, and rebuild on every save
-  motu build [<dir>]                   a macOS .app, or a Linux directory and tarball
+  motu build [<dir>]                   a macOS .app, or a Linux AppImage
 """)]
 import fs.dir
 import fs.file
@@ -126,19 +126,40 @@ fn bundle_macos(a: App, bin: String) : Int / Process + File + Stderr = {
   0
 }
 
-fn bundle_linux(a: App, bin: String) : Int / Process + File + Stderr = {
-  let out = "#{a.root}/build/#{a.name}-linux"
-  run_tool("rm", ["-rf", out]) |> ignore
-  dir.create_dir(out) |> ignore
-  run_tool("cp", [bin, "#{out}/#{a.name}"]) |> ignore
-  copy_tree(a.assets, "#{out}/assets")
-  write_file("#{out}/#{a.name}.desktop", "[Desktop Entry]\nType=Application\nName=#{a.name}\nExec=#{a.name}\nCategories=Utility;\n") |> ignore
-  run_tool("tar", ["-czf", "#{out}.tar.gz", "-C", "#{a.root}/build", "#{a.name}-linux"]) |> ignore
-  say("wrote #{out} and #{out}.tar.gz")
-  0
+fn desktop_entry(name: String) : String =
+  "[Desktop Entry]\nType=Application\nName=#{name}\nExec=#{name}\nIcon=#{name}\nCategories=Utility;\n"
+
+# An AppDir: the program in usr/bin with its assets beside it, where `motu.app`
+# looks first. GTK and WebKitGTK stay the system's; the shim loads them at run time.
+fn app_dir(a: App, bin: String, icon: String) : String / Process + File = {
+  let d = "#{a.root}/build/#{a.name}.AppDir"
+  run_tool("rm", ["-rf", d]) |> ignore
+  dir.create_dir(d) |> ignore
+  dir.create_dir("#{d}/usr") |> ignore
+  dir.create_dir("#{d}/usr/bin") |> ignore
+  run_tool("cp", [bin, "#{d}/usr/bin/#{a.name}"]) |> ignore
+  copy_tree(a.assets, "#{d}/usr/bin/assets")
+  run_tool("cp", [icon, "#{d}/#{a.name}.png"]) |> ignore
+  write_file("#{d}/#{a.name}.desktop", desktop_entry(a.name)) |> ignore
+  write_file("#{d}/AppRun", "#!/bin/sh\nexec \"$(dirname \"$(readlink -f \"$0\")\")/usr/bin/#{a.name}\" \"$@\"\n") |> ignore
+  run_tool("chmod", ["+x", "#{d}/AppRun"]) |> ignore
+  d
 }
 
-fn build_app(root: String) : Int / Process + File + Stderr = match app_at(root) {
+fn bundle_linux(a: App, bin: String, home: String) : Int / Process + File + Stderr = {
+  let own = "#{a.root}/icon.png"
+  let d = app_dir(a, bin, if file.exists(own) { own } else { "#{home}/tools/motu/icon.png" })
+  let image = "#{a.root}/build/#{a.name}-x86_64.AppImage"
+  let tool = if file.exists("#{home}/build/appimagetool") { "#{home}/build/appimagetool" } else { "appimagetool" }
+  if run_tool(tool, ["--no-appstream", d, image]) {
+    say("wrote #{image}")
+    0
+  } else {
+    fail("appimagetool failed or is missing; the AppDir is #{d} (install appimagetool, or put it at #{home}/build/appimagetool)")
+  }
+}
+
+fn build_app(root: String) : Int / Process + File + Stderr + Env + Ffi = match app_at(root) {
   Err(e) -> fail(e)
   Ok(a)  -> {
     let bin = "#{a.root}/build/#{a.name}-bin"
@@ -147,7 +168,7 @@ fn build_app(root: String) : Int / Process + File + Stderr = match app_at(root) 
     } else if file.exists("/System/Library/Frameworks/AppKit.framework") {
       bundle_macos(a, bin)
     } else {
-      bundle_linux(a, bin)
+      bundle_linux(a, bin, motu_home())
     }
   }
 }
