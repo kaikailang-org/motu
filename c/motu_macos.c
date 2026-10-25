@@ -5,6 +5,8 @@
 #include "motu.h"
 
 #include <dispatch/dispatch.h>
+#include <mach-o/dyld.h>
+#include <limits.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <objc/message.h>
@@ -427,6 +429,16 @@ const char *motu_data_dir(void) {
   static char dir[1024];
   const char *home = getenv("HOME");
   snprintf(dir, sizeof dir, "%s/Library/Application Support", home ? home : "");
+  return dir;
+}
+
+const char *motu_exe_dir(void) {
+  static char dir[PATH_MAX];
+  char raw[PATH_MAX];
+  uint32_t n = sizeof raw;
+  if (_NSGetExecutablePath(raw, &n) != 0 || !realpath(raw, dir)) return ".";
+  char *slash = strrchr(dir, '/');
+  if (slash) *slash = '\0';
   return dir;
 }
 

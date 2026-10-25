@@ -15,7 +15,7 @@ fn command(c: Call) : Result[JsonValue, String] / Desktop + Stdout + Clock = mat
   other    -> Err("unknown command #{other}")
 }
 
-fn main() : Int / Spawn + Ffi + Stdout + Env + Clock = {
+fn main() : Int / Spawn + Ffi + Stdout + Env + Clock + File = {
   let page = env.get("MOTU_PAGE") ?? "index.html"
   let cfg = Config {
     name: "Hello", assets: "examples/hello/assets", page: page,

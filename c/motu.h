@@ -94,6 +94,8 @@ void motu_clipboard_get_text(void *reply);
 int64_t motu_fsync_path(const char *path);
 /* [any] The platform's per-user data directory, without the app name. */
 const char *motu_data_dir(void);
+/* [any] The directory holding the running executable. */
+const char *motu_exe_dir(void);
 
 /* --- printing ---
  * [any] Renders the page at `url` in an offscreen webview and writes it to

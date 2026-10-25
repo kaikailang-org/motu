@@ -9,6 +9,7 @@ import ffi
 import spawn
 import encoding.json
 import encoding.json_bind
+import fs.file
 import motu.desktop
 import motu.menu
 import motu.shim
@@ -152,6 +153,17 @@ fn dispatch[e](h: Handlers[e], running: [Running]) : Unit / Actor[Incoming] + Sp
     Shutdown               -> running |! cancel_one
   }
 
+# A relative asset directory is looked up beside the executable first: inside a
+# macOS bundle (Contents/Resources), next to it, then from the current directory.
+fn asset_root(assets: String) : String / File + Ffi =
+  if string.starts_with(assets, "/") {
+    assets
+  } else {
+    let exe = shim.motu_exe_dir()
+    let found = ["#{exe}/../Resources/#{assets}", "#{exe}/#{assets}"] |> list.find(d => file.exists("#{d}/index.html"))
+    found ?? assets
+  }
+
 #[doc("""
 Opens the first window and runs until the application quits. Each page call
 runs `commands` on its own fiber; every other event goes to `events`
@@ -163,12 +175,12 @@ pub fn run[e](
   cfg: Config,
   commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e,
   events: (Event) -> Unit / Desktop + Dialog + Shell + Clipboard + e,
-) : Int / Spawn + Ffi + Stdout + e = {
+) : Int / Spawn + Ffi + Stdout + File + e = {
   let h = Handlers { commands: commands, events: events }
   let pid = spawn_actor(() => dispatch(h, []))
   let ud = retain_userdata(pid)
   shim.motu_init(ud, cfg.name)
-  shim.motu_set_asset_root(cfg.assets)
+  shim.motu_set_asset_root(asset_root(cfg.assets))
   menu.install(cfg.menus)
   let win = shim.motu_window_new(cfg.title, cfg.width, cfg.height)
   shim.motu_window_load(win, "motu://app/#{cfg.page}")
