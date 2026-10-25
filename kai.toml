@@ -5,6 +5,6 @@ edition = "hanga-roa"
 [dependencies]
 
 [native]
-sources = ["c/motu_macos.c"]
+sources = ["c/motu_macos.c", "c/motu_linux.c", "c/motu_linux_services.c"]
 include = ["c"]
 libs = ["objc"]
