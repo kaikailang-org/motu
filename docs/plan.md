@@ -92,6 +92,24 @@ macOS, Apple M4 Pro, native backend:
   chapter with footnotes (M).
 - Markdown parse and render of 150 000 words: 28 ms native, 16 ms on the C backend (M).
 
+The book application on the same Mac, with a manuscript of 164 775 words in 400
+documents (`tools/make-bench-book.py`, run with `#bench=<project>|<dir>`), all (M):
+
+| step | time |
+|---|---|
+| process start to the page's first call answered (`hello`) | 0.18–0.23 s |
+| open the project: load, word counts, first chapter | 87–90 ms |
+| word counts of every document | 42 ms |
+| search the project | 168 ms |
+| outliner of the whole manuscript | 46–48 ms |
+| save a 10 000-word chapter | 12 ms |
+| read it back, an 81 KB reply | 5 ms |
+| compile to Markdown / HTML | 24 / 51 ms |
+| compile to EPUB 3 (epubcheck: 0 errors) / Word | 360 / 117 ms |
+| compile to PDF | 1.4–1.6 s |
+| resident memory of the process at its peak | 132–186 MB |
+| `.app` bundle: the book application / `hello` | 2.2 MB / 720 KB |
+
 Linux, GitHub `ubuntu-24.04` runner under Xvfb, native backend:
 
 - Empty command round trip: 343–610 µs (M); GTK runs on a thread of its own there

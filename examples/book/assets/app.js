@@ -631,6 +631,12 @@ async function bench(arg) {
   await time('word counts (stats)', () => call('stats'));
   await time('search "harbour lights"', () => call('search', { query: 'harbour lights' }));
   await time('select a chapter', () => select(docsUnder(MANUSCRIPT)[200].id));
+  const big = Array.from({ length: 10000 }, (_, i) => (i % 12 === 11 ? 'harbour.\n\n' : 'harbour')).join(' ');
+  const id = docsUnder(MANUSCRIPT)[0].id;
+  const d = await loadDoc(id);
+  await time('save a 10 000-word chapter', () => call('save', { id, meta: d.meta, body: big }));
+  const r = await time(`read it back (${Math.round(big.length / 1024)} KB reply)`, () => call('read', { id }));
+  out.push(`read back intact: ${r.body === big}`);
   S.view = 'outliner';
   await time('outliner of the manuscript', () => select(MANUSCRIPT));
   S.view = 'editor';
