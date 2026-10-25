@@ -1,0 +1,231 @@
+#[doc("""
+An EPUB 3 builder: book metadata, ordered chapters, an optional style
+sheet and an optional cover image in; the zip bytes of the publication
+out.
+
+The package holds `mimetype` (first and stored), `META-INF/container.xml`,
+`OEBPS/content.opf` with the manifest, the spine and the metadata
+(`dcterms:modified` included), `OEBPS/nav.xhtml` with the EPUB 3 table of
+contents, `OEBPS/toc.ncx` for EPUB 2 readers, and one XHTML file per
+chapter. A chapter's body is an XHTML fragment the caller vouches for;
+it is placed after an `<h1>` holding the chapter title. Everything is
+derived from the book value alone, so the same book gives the same bytes.
+""")]
+
+import motu.xml
+import motu.zip
+import date
+import fs.file
+import time
+
+#[doc("Book metadata: `date` stamps `dc:date`, `dcterms:modified` and every archive entry.")]
+pub type Metadata = { title: String, author: String, language: String, identifier: String, date: WallTime }
+
+#[doc("A chapter: its title, for the heading and the tables of contents, and its XHTML body fragment.")]
+pub type Chapter = { title: String, body: String }
+
+#[doc("A book: metadata, chapters in reading order, an optional style sheet and optional cover image bytes (JPEG, PNG, GIF or WebP).")]
+pub type Book = { meta: Metadata, chapters: [Chapter], css: Option[String], cover: Option[Array[Byte]] }
+
+#[doc("A book with no style sheet and no cover.")]
+pub fn book(meta: Metadata, chapters: [Chapter]) : Book =
+  Book { meta: meta, chapters: chapters, css: None, cover: None }
+
+# ---- Names and dates --------------------------------------------
+
+fn opf_ns() : String = "http://www.idpf.org/2007/opf"
+fn xhtml_ns() : String = "http://www.w3.org/1999/xhtml"
+fn ops_ns() : String = "http://www.idpf.org/2007/ops"
+fn xhtml_type() : String = "application/xhtml+xml"
+
+fn chapter_file(i: Int) : String = "chapter-#{i:03}.xhtml"
+
+fn day_string(t: WallTime) : String = {
+  let d = date.from_walltime(t)
+  "#{d.year:04}-#{d.month:02}-#{d.day:02}"
+}
+
+fn timestamp(t: WallTime) : String = {
+  let s = (t.secs % 86400 + 86400) % 86400
+  "#{day_string(t)}T#{s / 3600:02}:#{s % 3600 / 60:02}:#{s % 60:02}Z"
+}
+
+fn starts(b: Array[Byte], at: Int, sig: [Int]) : Bool = match sig {
+  []        -> true
+  [x, ...t] -> array_length(b) > at and bytes_get_le(b, at, 1) == x and starts(b, at + 1, t)
+}
+
+#[doc("The media type and file extension of an image from its first bytes, for the formats EPUB readers must support.")]
+pub fn image_type(b: Array[Byte]) : Option[Pair[String, String]] =
+  if starts(b, 0, [0x89, 0x50, 0x4E, 0x47]) { Some(("image/png", "png")) }
+  else if starts(b, 0, [0xFF, 0xD8, 0xFF]) { Some(("image/jpeg", "jpg")) }
+  else if starts(b, 0, [0x47, 0x49, 0x46, 0x38]) { Some(("image/gif", "gif")) }
+  else if starts(b, 0, [0x52, 0x49, 0x46, 0x46]) and starts(b, 8, [0x57, 0x45, 0x42, 0x50]) { Some(("image/webp", "webp")) }
+  else { None }
+
+# ---- Documents --------------------------------------------------
+
+fn el(name: String, attrs: [xml.Attr], children: [xml.Node]) : xml.Node = xml.element(name, attrs, children)
+fn a(name: String, value: String) : xml.Attr = xml.attr(name, value)
+fn t(s: String) : xml.Node = xml.text(s)
+
+fn container() : String = xml.document(
+  el("container", [a("version", "1.0"), a("xmlns", "urn:oasis:names:tc:opendocument:xmlns:container")], [
+    el("rootfiles", [], [
+      el("rootfile", [a("full-path", "OEBPS/content.opf"), a("media-type", "application/oebps-package+xml")], [])
+    ])
+  ]))
+
+fn xhtml_page(m: Metadata, title: String, css: Bool, body: [xml.Node]) : String = {
+  let link = if css { [el("link", [a("rel", "stylesheet"), a("type", "text/css"), a("href", "style.css")], [])] } else { [] }
+  xml.document_with("<!DOCTYPE html>", el("html",
+    [a("xmlns", xhtml_ns()), a("xmlns:epub", ops_ns()), a("xml:lang", m.language), a("lang", m.language)],
+    [el("head", [], [el("title", [], [t(title)]), ...link]), el("body", [], body)]))
+}
+
+fn chapter_page(m: Metadata, css: Bool, i: Int, c: Chapter) : String =
+  xhtml_page(m, c.title, css, [
+    el("section", [a("epub:type", "chapter"), a("id", "chapter-#{i:03}")], [el("h1", [], [t(c.title)]), xml.raw(c.body)])
+  ])
+
+fn toc_items(cs: [Chapter], i: Int, acc: [xml.Node]) : [xml.Node] = match cs {
+  []        -> list_reverse(acc)
+  [c, ...r] -> toc_items(r, i + 1, [el("li", [], [el("a", [a("href", chapter_file(i))], [t(c.title)])]), ...acc])
+}
+
+fn nav_page(b: Book) : String =
+  xhtml_page(b.meta, "Contents", false, [
+    el("nav", [a("epub:type", "toc"), a("id", "toc")], [el("h1", [], [t("Contents")]), el("ol", [], toc_items(b.chapters, 1, []))])
+  ])
+
+fn nav_points(cs: [Chapter], i: Int, acc: [xml.Node]) : [xml.Node] = match cs {
+  []        -> list_reverse(acc)
+  [c, ...r] -> nav_points(r, i + 1, [
+    el("navPoint", [a("id", "nav-#{i}"), a("playOrder", "#{i}")], [
+      el("navLabel", [], [el("text", [], [t(c.title)])]),
+      el("content", [a("src", chapter_file(i))], [])
+    ]), ...acc])
+}
+
+fn ncx(b: Book) : String = {
+  let m = b.meta
+  let meta = (name: String, v: String) => el("meta", [a("name", name), a("content", v)], [])
+  xml.document(el("ncx", [a("xmlns", "http://www.daisy.org/z3986/2005/ncx/"), a("version", "2005-1"), a("xml:lang", m.language)], [
+    el("head", [], [meta("dtb:uid", m.identifier), meta("dtb:depth", "1"), meta("dtb:totalPageCount", "0"), meta("dtb:maxPageNumber", "0")]),
+    el("docTitle", [], [el("text", [], [t(m.title)])]),
+    el("docAuthor", [], [el("text", [], [t(m.author)])]),
+    el("navMap", [], nav_points(b.chapters, 1, []))
+  ]))
+}
+
+# ---- Package document -------------------------------------------
+
+fn item(id: String, href: String, media: String, props: String) : xml.Node = {
+  let p = if string_length(props) == 0 { [] } else { [a("properties", props)] }
+  el("item", [a("id", id), a("href", href), a("media-type", media), ...p], [])
+}
+
+fn chapter_items(n: Int, i: Int, acc: [xml.Node]) : [xml.Node] =
+  if i > n { list_reverse(acc) } else { chapter_items(n, i + 1, [item("c#{i:03}", chapter_file(i), xhtml_type(), ""), ...acc]) }
+
+fn chapter_refs(n: Int, i: Int, acc: [xml.Node]) : [xml.Node] =
+  if i > n { list_reverse(acc) } else { chapter_refs(n, i + 1, [el("itemref", [a("idref", "c#{i:03}")], []), ...acc]) }
+
+fn cover_items(cover: Option[Pair[String, String]]) : [xml.Node] = match cover {
+  None    -> []
+  Some(c) -> [item("cover-image", "cover.#{c.snd}", c.fst, "cover-image"), item("cover", "cover.xhtml", xhtml_type(), "")]
+}
+
+fn metadata(m: Metadata, has_cover: Bool) : xml.Node = {
+  let creator = if string_length(m.author) == 0 { [] } else { [el("dc:creator", [a("id", "creator")], [t(m.author)])] }
+  let cover = if has_cover { [el("meta", [a("name", "cover"), a("content", "cover-image")], [])] } else { [] }
+  el("metadata", [a("xmlns:dc", "http://purl.org/dc/elements/1.1/")], [
+    el("dc:identifier", [a("id", "book-id")], [t(m.identifier)]),
+    el("dc:title", [], [t(m.title)]),
+    ...creator,
+    el("dc:language", [], [t(m.language)]),
+    el("dc:date", [], [t(day_string(m.date))]),
+    el("meta", [a("property", "dcterms:modified")], [t(timestamp(m.date))]),
+    ...cover
+  ])
+}
+
+fn package(b: Book, cover: Option[Pair[String, String]]) : String = {
+  let n = list_length(b.chapters)
+  let css = match b.css { Some(_) -> [item("css", "style.css", "text/css", "")]  None -> [] }
+  let cover_ref = match cover { Some(_) -> [el("itemref", [a("idref", "cover")], [])]  None -> [] }
+  let has_cover = match cover { Some(_) -> true  None -> false }
+  let manifest = [
+    item("nav", "nav.xhtml", xhtml_type(), "nav"), item("ncx", "toc.ncx", "application/x-dtbncx+xml", ""),
+    ...css, ...cover_items(cover), ...chapter_items(n, 1, [])
+  ]
+  xml.document(el("package", [a("xmlns", opf_ns()), a("version", "3.0"), a("unique-identifier", "book-id"), a("xml:lang", b.meta.language)], [
+    metadata(b.meta, has_cover),
+    el("manifest", [], manifest),
+    el("spine", [a("toc", "ncx")], [...cover_ref, ...chapter_refs(n, 1, [])])
+  ]))
+}
+
+# ---- Assembly ---------------------------------------------------
+
+fn validate(m: Metadata) : Result[Unit, String] =
+  if string_length(m.title) == 0 { Err("epub: the book has no title") }
+  else if string_length(m.language) == 0 { Err("epub: the book has no language") }
+  else if string_length(m.identifier) == 0 { Err("epub: the book has no identifier") }
+  else { Ok(()) }
+
+fn cover_type(b: Book) : Result[Option[Pair[String, String]], String] = match b.cover {
+  None      -> Ok(None)
+  Some(img) -> match image_type(img) {
+    Some(ty) -> Ok(Some(ty))
+    None     -> Err("epub: the cover is not a JPEG, PNG, GIF or WebP image")
+  }
+}
+
+fn chapter_entries(b: Book, cs: [Chapter], i: Int, acc: [zip.Entry]) : [zip.Entry] = match cs {
+  []        -> list_reverse(acc)
+  [c, ...r] -> {
+    let page = chapter_page(b.meta, b.css != None, i, c)
+    chapter_entries(b, r, i + 1, [zip.text("OEBPS/#{chapter_file(i)}", page, zip.Deflated, b.meta.date), ...acc])
+  }
+}
+
+fn extra_entries(b: Book, cover: Option[Pair[String, String]]) : [zip.Entry] = {
+  let at = b.meta.date
+  let css = match b.css { Some(s) -> [zip.text("OEBPS/style.css", s, zip.Deflated, at)]  None -> [] }
+  let img = match (b.cover, cover) {
+    (Some(bytes), Some(ty)) -> [
+      zip.stored("OEBPS/cover.#{ty.snd}", bytes, at),
+      zip.text("OEBPS/cover.xhtml", xhtml_page(b.meta, "Cover", false, [
+        el("section", [a("epub:type", "cover")], [el("img", [a("src", "cover.#{ty.snd}"), a("alt", b.meta.title)], [])])
+      ]), zip.Deflated, at)
+    ]
+    _ -> []
+  }
+  [...css, ...img]
+}
+
+#[doc("The archive entries of `b`, in the order the EPUB container requires.")]
+pub fn entries(b: Book) : Result[[zip.Entry], String] = {
+  validate(b.meta)!
+  let cover = cover_type(b)!
+  let at = b.meta.date
+  Ok([
+    zip.text("mimetype", "application/epub+zip", zip.Stored, at),
+    zip.text("META-INF/container.xml", container(), zip.Deflated, at),
+    zip.text("OEBPS/content.opf", package(b, cover), zip.Deflated, at),
+    zip.text("OEBPS/nav.xhtml", nav_page(b), zip.Deflated, at),
+    zip.text("OEBPS/toc.ncx", ncx(b), zip.Deflated, at),
+    ...extra_entries(b, cover),
+    ...chapter_entries(b, b.chapters, 1, [])
+  ])
+}
+
+#[doc("The bytes of the EPUB file for `b`.")]
+pub fn build(b: Book) : Result[Array[Byte], String] = zip.archive(entries(b)!)
+
+#[doc("Writes the EPUB file for `b` to `path`, replacing any file there.")]
+pub fn write_file(path: String, b: Book) : Result[Unit, String] / File = {
+  let bytes = build(b)!
+  file.write_bytes(path, bytes)
+}

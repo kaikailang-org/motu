@@ -176,9 +176,9 @@ A writing studio for long books, modelled on Scrivener:
 | saving without losing work | `motu.project`: the `Project` effect, confined to the project root; atomic write (temporary file, flush, rename) | kaikai `fs`; a flush to disk |
 | the project as a bundle of files | a documented bundle layout (below) and recent-projects list in the application data directory | `fs`, `encoding.toml` |
 | project search | `motu.search`: a full-text index in memory, rebuilt from the files when a project opens | none |
-| EPUB, DOCX and backups | zip writer: stored entries and CRC-32 for EPUB, deflate for backups | kaikai stdlib (missing) |
+| EPUB, DOCX and backups | zip writer: stored entries and CRC-32 for EPUB, deflate for backups | Motu: `motu.zip`, `motu.deflate`, `motu.crc32` |
 | compile reads the manuscript | Markdown parser to a syntax tree (CommonMark plus footnotes) | kaikai stdlib or an ecosystem package (missing) |
-| EPUB and DOCX contents | XML writer with escaping | small; in Motu or stdlib |
+| EPUB and DOCX contents | XML writer with escaping; the EPUB 3 package | Motu: `motu.xml`, `motu.epub` |
 | PDF | print the compiled HTML through the webview to a PDF file | shim (`createPDF` on macOS, a print operation to file on GTK) (R) |
 | spelling | the engine's spell checker on editable text | WKWebView native; enabled per context on WebKitGTK (R) |
 | images dropped on the binder | file drop on the window, delivered as paths | shim |
@@ -324,9 +324,9 @@ can own the state behind it.
 | C calls kaikai (`extern "C"` with a body), from a GUI thread too | kaikai | shipped (R); verified in stage 0 |
 | Objective-C sources and macOS frameworks in `[native]` | kaikai | not needed: the shims are C over the Objective-C runtime and load their frameworks with `dlopen` (M) |
 | `extern "C"` exports declared in an imported module of a package | kaikai | missing at link today (M); fixed in lnds/kaikai#3164, examples carry the callbacks until a release ships it |
-| zip writer (stored + CRC-32; deflate) | kaikai stdlib | missing |
+| zip writer (stored + CRC-32; deflate) | Motu | shipped |
 | flush a file to disk (`fsync`) for atomic saves | Motu shim | `motu_fsync_path` (`F_FULLFSYNC` on macOS) |
-| XML writer | kaikai stdlib or Motu | missing |
+| XML writer | Motu | shipped |
 | Markdown parser (CommonMark plus footnotes) to a syntax tree | kaikai stdlib or an ecosystem package | missing |
 | Windows runtime | kaikai | not started; spike numbers above |
 

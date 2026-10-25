@@ -1,0 +1,131 @@
+import motu.bytebuf
+import motu.crc32
+import motu.deflate
+import motu.zip
+import fs.dir
+import fs.file
+import time
+
+fn at() : WallTime = WallTime { secs: 1761400000, nanos: 0 }
+
+fn u16(b: Array[Byte], i: Int) : Int = bytes_get_le(b, i, 2)
+fn u32(b: Array[Byte], i: Int) : Int = bytes_get_le(b, i, 4)
+
+fn sentence(i: Int) : String =
+  "Chapter #{i % 97}: the wind off Rano Raraku carried #{i * 7919 % 1000} voices over the stone heads, and the moai kept their silence. "
+
+fn prose_loop(i: Int, n: Int, b: bytebuf.ByteBuf) : bytebuf.ByteBuf =
+  if bytebuf.length(b) >= n { b } else { prose_loop(i + 1, n, bytebuf.push_string(b, sentence(i))) }
+
+fn prose(n: Int) : Array[Byte] = {
+  let all = bytebuf.to_array(prose_loop(0, n, bytebuf.new(n + 256)))
+  bytes_blit(array_make(n, bin_byte(0)), 0, all, 0, n)
+}
+
+fn noise_loop(b: bytebuf.ByteBuf, x: Int, n: Int) : bytebuf.ByteBuf =
+  if n == 0 { b } else {
+    let y = bit_and(x * 1103515245 + 12345, 0x7FFFFFFF)
+    noise_loop(bytebuf.push_byte(b, bit_ushr(y, 16)), y, n - 1)
+  }
+
+fn noise(n: Int) : Array[Byte] = bytebuf.to_array(noise_loop(bytebuf.new(n), 12345, n))
+
+fn splits_agree(a: Array[Byte], k: Int) : Bool =
+  if k > array_length(a) { true } else {
+    let c = crc32.finish(crc32.update(crc32.update(crc32.start(), a, 0, k), a, k, array_length(a) - k))
+    c == crc32.crc32(a) and splits_agree(a, k + 1)
+  }
+
+fn archive_or_empty(es: [zip.Entry]) : Array[Byte] = match zip.archive(es) {
+  Ok(a)  -> a
+  Err(_) -> array_make(0, bin_byte(0))
+}
+
+fn refused(es: [zip.Entry]) : Bool = match zip.archive(es) {
+  Ok(_)  -> false
+  Err(_) -> true
+}
+
+test "crc32 of the check vectors" {
+  assert crc32.crc32_string("123456789") == 0xCBF43926
+  assert crc32.crc32_string("") == 0
+  assert crc32.crc32_string("a") == 0xE8B7BE43
+  assert crc32.crc32_string("The quick brown fox jumps over the lazy dog") == 0x414FA339
+}
+
+test "crc32 in pieces agrees with one pass at every split" {
+  assert splits_agree(bytebuf.of_string("The quick brown fox jumps over the lazy dog"), 0)
+}
+
+test "dos timestamps pack date and time, clamping before 1980" {
+  let date = bit_or(bit_or(bit_shl(2025 - 1980, 9), bit_shl(10, 5)), 25)
+  let tod = bit_or(bit_or(bit_shl(13, 11), bit_shl(46, 5)), 40 / 2)
+  assert zip.dos_datetime(at()) == bit_or(bit_shl(date, 16), tod)
+  assert zip.dos_datetime(WallTime { secs: 0, nanos: 0 }) == bit_shl(33, 16)
+}
+
+test "deflate of known inputs matches zlib's raw stream" {
+  let empty = deflate.compress(array_make(0, bin_byte(0)))
+  assert array_length(empty) == 2 and bytes_get_le(empty, 0, 2) == 0x0003
+  let one = deflate.compress(bytebuf.of_string("a"))
+  assert array_length(one) == 3 and bytes_get_le(one, 0, 3) == 0x00044B
+}
+
+test "deflate shrinks prose and barely grows noise" {
+  let text = prose(200000)
+  assert array_length(deflate.compress(text)) < array_length(text) / 4
+  let rnd = noise(100000)
+  assert array_length(deflate.compress(rnd)) <= array_length(rnd) + 64
+}
+
+test "a stored entry is laid out as the zip format says" {
+  let a = archive_or_empty([zip.text("mimetype", "application/epub+zip", zip.Stored, at())])
+  assert u32(a, 0) == 0x04034b50
+  assert u16(a, 6) == 0 and u16(a, 8) == 0
+  assert u32(a, 14) == crc32.crc32_string("application/epub+zip")
+  assert u32(a, 18) == 20 and u32(a, 22) == 20
+  assert u16(a, 26) == 8 and u16(a, 28) == 0
+  assert bytes_get_string(a, 30, 8) == "mimetype"
+  assert bytes_get_string(a, 38, 20) == "application/epub+zip"
+  let end = array_length(a) - 22
+  assert u32(a, end) == 0x06054b50 and u16(a, end + 10) == 1
+  assert u32(a, end + 16) == 58 and u32(a, 58) == 0x02014b50
+}
+
+test "a deflated entry that would grow is stored instead" {
+  let a = archive_or_empty([zip.text("tiny.txt", "hi", zip.Deflated, at()), zip.deflated("big.txt", prose(50000), at())])
+  assert u16(a, 8) == 0
+  let second = 30 + 8 + 2
+  assert u32(a, second) == 0x04034b50 and u16(a, second + 8) == 8
+  assert u32(a, second + 18) < u32(a, second + 22)
+}
+
+test "non-ASCII names carry the UTF-8 flag" {
+  let a = archive_or_empty([zip.text("ñandú.txt", "x", zip.Stored, at())])
+  assert u16(a, 6) == 0x0800
+  let b = archive_or_empty([zip.text("plain.txt", "x", zip.Stored, at())])
+  assert u16(b, 6) == 0
+}
+
+test "empty and absolute paths are refused" {
+  assert refused([zip.text("", "x", zip.Stored, at())])
+  assert refused([zip.text("/etc/passwd", "x", zip.Stored, at())])
+  assert not refused([])
+}
+
+test "writes the archives tools/check-archives.sh inspects" {
+  dir.create_dir("build") |> ignore
+  dir.create_dir("build/archives") |> ignore
+  let text = prose(1048576)
+  assert file.write_bytes("build/archives/prose.txt", text) == Ok(())
+  let small = [
+    zip.text("mimetype", "application/epub+zip", zip.Stored, at()),
+    zip.text("notes/ñandú.md", "# Ñandú\n\nUn ave corredora.\n", zip.Stored, at()),
+    zip.text("empty.txt", "", zip.Stored, at())
+  ]
+  assert zip.write_file("build/archives/stored.zip", small) == Ok(())
+  let big = [zip.deflated("prose.txt", text, at()), zip.deflated("noise.bin", noise(65536), at()), ...small]
+  assert zip.write_file("build/archives/deflated.zip", big) == Ok(())
+}
+
+fn main() : Int = 0

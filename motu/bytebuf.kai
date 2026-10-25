@@ -1,0 +1,76 @@
+#[doc("""
+A growable byte buffer as a pure value: appends, little-endian integer
+writes and back-patching return the new buffer, and a buffer threaded
+linearly is written in place. `to_array` copies the bytes out once, as
+the `Array[Byte]` the file API writes.
+""")]
+
+# A one-constructor sum, not a record: a vector held in a record field is
+# copied on every write, while one matched out of a constructor is not.
+#[doc("A growable byte buffer; a value, so it carries no effect.")]
+pub type ByteBuf = Buf(Vec[Int])
+
+#[doc("An empty buffer with room for `cap` bytes before its first grow.")]
+pub fn new(cap: Int) : ByteBuf = Buf(vec_reserve(cap))
+
+#[doc("The number of bytes written so far.")]
+pub fn length(^b: ByteBuf) : Int = match b { Buf(v) -> vec_length(v) }
+
+fn push_word(v: Vec[Int], x: Int, k: Int) : Vec[Int] =
+  if k == 0 { v } else { push_word(vec_push(v, bit_and(x, 255)), bit_ushr(x, 8), k - 1) }
+
+#[doc("Appends the byte `x` (its low 8 bits).")]
+pub fn push_byte(b: ByteBuf, x: Int) : ByteBuf = match b { Buf(v) -> Buf(vec_push(v, bit_and(x, 255))) }
+
+#[doc("Appends the low `width` bytes of `x`, little-endian; `width` is 0 to 8.")]
+pub fn push_le(b: ByteBuf, x: Int, width: Int) : ByteBuf = match b { Buf(v) -> Buf(push_word(v, x, width)) }
+
+fn copy_array(v: Vec[Int], src: Array[Byte], i: Int, stop: Int) : Vec[Int] =
+  if i >= stop { v }
+  else if i + 7 <= stop { copy_array(push_word(v, bytes_get_le(src, i, 7), 7), src, i + 7, stop) }
+  else { copy_array(vec_push(v, bytes_get_le(src, i, 1)), src, i + 1, stop) }
+
+#[doc("Appends `n` bytes of `src` starting at `off`.")]
+pub fn push_slice(b: ByteBuf, src: Array[Byte], off: Int, n: Int) : ByteBuf =
+  match b { Buf(v) -> Buf(copy_array(v, src, off, off + n)) }
+
+#[doc("Appends every byte of `src`.")]
+pub fn push_bytes(b: ByteBuf, src: Array[Byte]) : ByteBuf = push_slice(b, src, 0, array_length(src))
+
+fn patch_word(v: Vec[Int], at: Int, x: Int, k: Int) : Vec[Int] =
+  if k == 0 { v } else { patch_word(vec_set(v, at, bit_and(x, 255)), at + 1, bit_ushr(x, 8), k - 1) }
+
+#[doc("Appends the UTF-8 bytes of `s`.")]
+pub fn push_string(b: ByteBuf, s: String) : ByteBuf = push_bytes(b, of_string(s))
+
+#[doc("Overwrites `width` bytes at `at` with `x`, little-endian; `at + width` must not pass the length.")]
+pub fn patch_le(b: ByteBuf, at: Int, x: Int, width: Int) : ByteBuf =
+  match b { Buf(v) -> Buf(patch_word(v, at, x, width)) }
+
+#[doc("The byte at `i` as 0 to 255; `i` must be below the length.")]
+pub fn get(^b: ByteBuf, i: Int) : Int = match b { Buf(v) -> vec_get(v, i) }
+
+fn gather(^v: Vec[Int], i: Int, k: Int, acc: Int) : Int =
+  if k == 0 { acc } else { gather(v, i, k - 1, bit_or(bit_shl(acc, 8), vec_get(v, i + k - 1))) }
+
+fn fill(out: Array[Byte], ^v: Vec[Int], i: Int, n: Int) : Array[Byte] / Mutable =
+  if i >= n { out } else {
+    let k = if n - i < 7 { n - i } else { 7 }
+    fill(bytes_put_le(out, i, gather(v, i, k, 0), k), v, i + k, n)
+  }
+
+#[doc("A fresh array holding exactly the bytes written.")]
+pub fn to_array(b: ByteBuf) : Array[Byte] = match b {
+  Buf(v) -> {
+    let n = vec_length(v)
+    let out = array_make(n, bin_byte(0))
+    fill(out, v, 0, n)
+  }
+}
+
+#[doc("The UTF-8 bytes of `s` as an array.")]
+pub fn of_string(s: String) : Array[Byte] =
+  bytes_put_string(array_make(string_length(s), bin_byte(0)), 0, s)
+
+#[doc("The bytes of `a` read back as a string, byte-exact.")]
+pub fn to_string(a: Array[Byte]) : String = bytes_get_string(a, 0, array_length(a))

@@ -1,0 +1,168 @@
+#[doc("""
+A raw DEFLATE compressor (RFC 1951), the stream zip's method 8 carries.
+
+LZ77 runs over a 32 KiB window with hash chains on three-byte prefixes
+and lazy matching, the way zlib's levels do. The tokens of each block
+are then written with whichever of a dynamic Huffman code, the fixed
+code, or stored bytes is smallest, so incompressible input grows by
+five bytes per block of 16 384 tokens at most.
+
+The input is read once into a vector of seven-byte windows, so a hash,
+a match probe and a match extension each cost one vector read; the
+chain tables and the token buffer are vectors threaded linearly, so
+their writes happen in place.
+""")]
+
+import motu.deflate_block.{Bits, Source, Tables, align, emit_block, tables}
+
+#[doc("How hard the matcher searches: chain length, the match length that stops lazy search, the length that quarters the chain, and the length that ends a search.")]
+pub type Level = { chain: Int, defer: Int, good: Int, nice: Int }
+
+#[doc("The search effort for a level from 1 (fastest) to 9 (smallest), as zlib tunes them; 6 is the default.")]
+pub fn level(n: Int) : Level = match n {
+  1 -> Level { chain: 4, defer: 4, good: 4, nice: 8 }
+  2 -> Level { chain: 8, defer: 5, good: 4, nice: 16 }
+  3 -> Level { chain: 32, defer: 6, good: 4, nice: 32 }
+  4 -> Level { chain: 16, defer: 4, good: 4, nice: 16 }
+  5 -> Level { chain: 32, defer: 16, good: 8, nice: 32 }
+  7 -> Level { chain: 256, defer: 32, good: 8, nice: 128 }
+  8 -> Level { chain: 1024, defer: 128, good: 32, nice: 258 }
+  9 -> Level { chain: 4096, defer: 258, good: 32, nice: 258 }
+  _ -> Level { chain: 128, defer: 16, good: 8, nice: 128 }
+}
+
+fn imin(a: Int, b: Int) : Int = if a < b { a } else { b }
+
+fn wsize() : Int = 32768
+fn wmask() : Int = 32767
+fn hsize() : Int = 65536
+fn tokcap() : Int = 16384
+
+# ---- Input windows ----------------------------------------------
+
+# `win[i]` holds the seven input bytes from `i`, little-endian, zero past the end.
+type St = { win: Vec[Int], n: Int, lv: Level, tb: Tables }
+
+fn tail_window(d: Array[Byte], i: Int, stop: Int, k: Int, acc: Int) : Int =
+  if k >= 7 or i + k >= stop { acc }
+  else { tail_window(d, i, stop, k + 1, bit_or(acc, bit_shl(bytes_get_le(d, i + k, 1), 8 * k))) }
+
+fn windows(d: Array[Byte], i: Int, stop: Int, v: Vec[Int]) : Vec[Int] =
+  if i >= stop { v }
+  else if i + 7 <= stop { windows(d, i + 1, stop, vec_push(v, bytes_get_le(d, i, 7))) }
+  else { windows(d, i + 1, stop, vec_push(v, tail_window(d, i, stop, 0, 0))) }
+
+fn source(s: St) : Source = Source { win: s.win, tb: s.tb }
+
+fn byte_at(s: St, i: Int) : Int = bit_and(vec_get(s.win, i), 255)
+
+fn hash(s: St, i: Int) : Int =
+  bit_ushr(bit_and(bit_and(vec_get(s.win, i), 0xFFFFFF) * 2654435761, 0xFFFFFFFF), 16)
+
+# `tab` holds the chain heads by hash, then the previous link by position;
+# every entry is a position plus one, and 0 ends a chain. Its readers borrow
+# it (`^`): a read through an owned parameter makes the next write copy it.
+fn link(tab: Vec[Int], i: Int, h: Int, old: Int) : Vec[Int] =
+  vec_set(vec_set(tab, hsize() + bit_and(i, wmask()), old), h, i + 1)
+
+fn insert_range(s: St, tab: Vec[Int], i: Int, stop: Int) : Vec[Int] =
+  if i >= stop or i + 3 > s.n { tab } else {
+    let h = hash(s, i)
+    let old = vec_get(tab, h)
+    insert_range(s, link(tab, i, h, old), i + 1, stop)
+  }
+
+# ---- Match search -----------------------------------------------
+
+fn trailing_zero_bytes(x: Int) : Int = (bit_count(bit_xor(x, x - 1)) - 1) / 8
+
+# Seven bytes per probe keeps the xor non-negative.
+fn run_length(^win: Vec[Int], a: Int, b: Int, k: Int, max: Int) : Int =
+  if k >= max { max } else {
+    let x = bit_xor(vec_get(win, a + k), vec_get(win, b + k))
+    if x == 0 { run_length(win, a, b, k + 7, max) } else { imin(max, k + trailing_zero_bytes(x)) }
+  }
+
+fn pack(len: Int, dist: Int) : Int =
+  if dist == 0 or (len == 3 and dist > 4096) { 0 } else { bit_or(bit_shl(len, 16), dist) }
+
+fn pair_at(^win: Vec[Int], i: Int) : Int = bit_and(vec_get(win, i), 0xFFFF)
+
+fn ended(i: Int, cand: Int, chain: Int) : Bool = cand == 0 or chain == 0 or i - cand + 1 > wsize()
+
+# A candidate can beat `best` only if the two bytes ending at `best` agree.
+fn candidate(^win: Vec[Int], p: Int, i: Int, best: Int, max: Int) : Int =
+  if pair_at(win, p + best - 1) != pair_at(win, i + best - 1) { 0 } else { run_length(win, p, i, 0, max) }
+
+# Links only point backwards; one that does not was overwritten by a newer position.
+fn older(^tab: Vec[Int], p: Int, cand: Int) : Int = {
+  let next = vec_get(tab, hsize() + bit_and(p, wmask()))
+  if next < cand { next } else { 0 }
+}
+
+# A match of `nice` bytes ends the search; `max` caps a match at the input's end.
+fn walk(^win: Vec[Int], ^tab: Vec[Int], i: Int, max: Int, nice: Int, cand: Int, chain: Int, best: Int, bdist: Int) : Int =
+  if ended(i, cand, chain) { pack(best, bdist) } else {
+    let p = cand - 1
+    let l = candidate(win, p, i, best, max)
+    if l <= best { walk(win, tab, i, max, nice, older(tab, p, cand), chain - 1, best, bdist) }
+    else if l >= nice { pack(l, i - p) }
+    else { walk(win, tab, i, max, nice, older(tab, p, cand), chain - 1, l, i - p) }
+  }
+
+fn search(s: St, ^tab: Vec[Int], i: Int, cand: Int, plen: Int) : Int =
+  if i + 3 > s.n or plen >= s.lv.defer or cand == 0 { 0 } else {
+    let chain = if plen >= s.lv.good { bit_ushr(s.lv.chain, 2) } else { s.lv.chain }
+    let max = imin(258, s.n - i)
+    walk(s.win, tab, i, max, imin(max, s.lv.nice), cand, chain, 2, 0)
+  }
+
+# ---- LZ77 with one step of lazy evaluation ----------------------
+
+fn head_of(s: St, ^tab: Vec[Int], i: Int) : Int = if i + 3 > s.n { 0 } else { vec_get(tab, hash(s, i)) }
+
+fn insert_at(s: St, tab: Vec[Int], i: Int, cand: Int) : Vec[Int] =
+  if i + 3 > s.n { tab } else { link(tab, i, hash(s, i), cand) }
+
+# The literal at `i - 1` becomes token `nt` when it is still pending.
+fn pending(s: St, toks: Vec[Int], nt: Int, i: Int, avail: Int) : Vec[Int] =
+  if avail == 1 { vec_set(toks, nt, byte_at(s, i - 1)) } else { toks }
+
+# A token below 256 is a literal; a match is `len << 16 | dist`.
+# `pm` is the match found at `i - 1`; `avail` is 1 while the byte there is not yet a token.
+fn lz(s: St, w: Bits, tab: Vec[Int], toks: Vec[Int], i: Int, nt: Int, bs: Int, pm: Int, avail: Int) : Bits / Mutable =
+  if nt >= tokcap() - 2 {
+    lz(s, emit_block(source(s), toks, w, nt, bs, i - avail, false), tab, toks, i, 0, i - avail, pm, avail)
+  } else if i >= s.n {
+    align(emit_block(source(s), pending(s, toks, nt, i, avail), w, nt + avail, bs, s.n, true))
+  } else {
+    let plen = bit_ushr(pm, 16)
+    let cand = head_of(s, tab, i)
+    let tab2 = insert_at(s, tab, i, cand)
+    let m = search(s, tab2, i, cand, plen)
+    if plen >= 3 and bit_ushr(m, 16) <= plen {
+      lz(s, w, insert_range(s, tab2, i + 1, i - 1 + plen), vec_set(toks, nt, pm), i - 1 + plen, nt + 1, bs, 0, 0)
+    } else {
+      lz(s, w, tab2, pending(s, toks, nt, i, avail), i + 1, nt + avail, bs, m, 1)
+    }
+  }
+
+# ---- Entry points -----------------------------------------------
+
+fn run(s: St) : Bits = {
+  let w = Bits { buf: array_make(s.n / 2 + 1024, bin_byte(0)), pos: 0, acc: 0, n: 0 }
+  lz(s, w, vec_make(hsize() + wsize(), 0), vec_make(tokcap(), 0), 0, 0, 0, 0, 0)
+}
+
+#[doc("The raw DEFLATE stream of `n` bytes of `data` from `off`, searched with effort `lv`.")]
+pub fn compress_slice(data: Array[Byte], off: Int, n: Int, lv: Level) : Array[Byte] = {
+  let out = run(St { win: windows(data, off, off + n, vec_reserve(n)), n: n, lv: lv, tb: tables() })
+  bytes_blit(array_make(out.pos, bin_byte(0)), 0, out.buf, 0, out.pos)
+}
+
+#[doc("The raw DEFLATE stream of `data` at effort `lv`.")]
+pub fn compress_level(data: Array[Byte], lv: Level) : Array[Byte] =
+  compress_slice(data, 0, array_length(data), lv)
+
+#[doc("The raw DEFLATE stream of `data` at the default effort, level 6.")]
+pub fn compress(data: Array[Byte]) : Array[Byte] = compress_slice(data, 0, array_length(data), level(6))

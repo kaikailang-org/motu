@@ -1,0 +1,101 @@
+#[doc("""
+Throughput of the archive writers: DEFLATE over 1 MB and 10 MB of prose at
+levels 1, 6 and 9, and an EPUB of a 150 000-word book in 400 chapters.
+
+Build with `kai build --release tools/bench_archive.kai -o build/bench_archive`
+and run `build/bench_archive [prose.txt]`. The prose file is repeated or cut
+to each size; without one, the text is generated from a fixed vocabulary.
+""")]
+
+import motu.bytebuf
+import motu.deflate
+import motu.epub
+import motu.xml
+import collections.vec
+import fs.file
+import os.args
+import time
+
+fn vocabulary() : Vec[String] = ["the", "island", "wind", "stone", "carried", "voices", "over", "and", "moai",
+  "kept", "their", "silence", "while", "a", "boat", "crossed", "toward", "Hanga", "Roa", "under", "grey",
+  "clouds", "she", "wrote", "letters", "nobody", "would", "read", "of", "in", "to", "was", "remembered"]
+
+fn generated(b: bytebuf.ByteBuf, x: Int, n: Int) : bytebuf.ByteBuf =
+  if bytebuf.length(b) >= n { b } else {
+    let y = bit_and(x * 1103515245 + 12345, 0x7FFFFFFF)
+    let v = vocabulary()
+    let w = vec_get(v, bit_ushr(y, 16) % vec_length(v))
+    let sep = if bit_and(y, 31) == 0 { ".\n" } else { " " }
+    generated(bytebuf.push_string(bytebuf.push_string(b, w), sep), y, n)
+  }
+
+fn repeated(src: Array[Byte], b: bytebuf.ByteBuf, n: Int) : bytebuf.ByteBuf =
+  if bytebuf.length(b) >= n { b } else { repeated(src, bytebuf.push_bytes(b, src), n) }
+
+fn sized(src: Option[Array[Byte]], n: Int) : Array[Byte] = {
+  let b = match src {
+    Some(a) -> repeated(a, bytebuf.new(n + array_length(a)), n)
+    None    -> generated(bytebuf.new(n + 16), 1, n)
+  }
+  let all = bytebuf.to_array(b)
+  bytes_blit(array_make(n, bin_byte(0)), 0, all, 0, n)
+}
+
+fn nanos() : Int / Clock = instant_to_nanos(monotonic())
+
+fn best_of(data: Array[Byte], lv: Int, runs: Int, best: Int, size: Int) : Pair[Int, Int] / Clock =
+  if runs == 0 { (best, size) } else {
+    let t0 = nanos()
+    let out = deflate.compress_level(data, deflate.level(lv))
+    let dt = nanos() - t0
+    best_of(data, lv, runs - 1, if best == 0 or dt < best { dt } else { best }, array_length(out))
+  }
+
+fn report_deflate(data: Array[Byte], lv: Int) : Unit / Stdout + Clock = {
+  let r = best_of(data, lv, 3, 0, 0)
+  let n = array_length(data)
+  let mbs = int_to_real(n) / 1048576.0 / (int_to_real(r.fst) / 1000000000.0)
+  let ratio = 100.0 * int_to_real(r.snd) / int_to_real(n)
+  println("deflate #{n / 1048576} MiB level #{lv}: #{r.fst / 1000000} ms, #{mbs:.1} MiB/s, #{r.snd} bytes (#{ratio:.1}%)")
+}
+
+fn words(src: Option[Array[Byte]]) : Vec[String] = {
+  let text = bytebuf.to_string(sized(src, 2000000))
+  vec_from_list(string_split(text, " ") |? string_length(.) > 0)
+}
+
+fn paragraph(ws: Vec[String], from: Int, n: Int) : String =
+  "<p>#{xml.escape(string_join(vec.to_list(vec_slice(ws, from % (vec_length(ws) - n), n)), " "))}</p>"
+
+fn chapter_body(ws: Vec[String], start: Int, k: Int, acc: [String]) : String =
+  if k == 0 { string_concat_all(acc) } else { chapter_body(ws, start + 75, k - 1, [paragraph(ws, start, 75), ...acc]) }
+
+fn chapters(ws: Vec[String], i: Int, acc: [epub.Chapter]) : [epub.Chapter] =
+  if i == 0 { acc } else {
+    chapters(ws, i - 1, [epub.Chapter { title: "Chapter #{i}", body: chapter_body(ws, i * 375, 5, []) }, ...acc])
+  }
+
+fn report_epub(src: Option[Array[Byte]]) : Unit / Stdout + Clock = {
+  let ws = words(src)
+  let meta = epub.Metadata {
+    title: "A Long Book", author: "Bench", language: "en",
+    identifier: "urn:uuid:00000000-0000-4000-8000-000000000000", date: WallTime { secs: 1761400000, nanos: 0 }
+  }
+  let b = epub.book(meta, chapters(ws, 400, []))
+  let t0 = nanos()
+  let size = match epub.build(b) { Ok(a) -> array_length(a)  Err(_) -> 0 }
+  println("epub of 150000 words in 400 chapters: #{(nanos() - t0) / 1000000} ms, #{size} bytes")
+}
+
+fn main() : Int / Stdout + File + Env + Clock = {
+  let src = match args() |> list.nth(0) {
+    Some(p) -> match file.read_bytes(p) { Ok(a) -> Some(a)  Err(_) -> None }
+    None    -> None
+  }
+  let one = sized(src, 1048576)
+  let ten = sized(src, 10485760)
+  [1, 6, 9] |! report_deflate(one, .)
+  [1, 6, 9] |! report_deflate(ten, .)
+  report_epub(src)
+  0
+}

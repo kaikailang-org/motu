@@ -1,0 +1,285 @@
+#[doc("""
+The block layer of the DEFLATE compressor: the length and distance code
+tables, an LSB-first bit writer, and the writing of one block of tokens
+as stored bytes, with the fixed Huffman code, or with a dynamic code
+and its header, whichever is smallest.
+""")]
+
+import motu.huffman
+
+fn imin(a: Int, b: Int) : Int = if a < b { a } else { b }
+
+fn low56() : Int = 0xFFFFFFFFFFFFFF
+
+#[doc("What a block reads besides its tokens: the input windows, for stored blocks, and the code tables.")]
+pub(pkg) type Source = { win: Vec[Int], tb: Tables }
+
+# ---- Code tables ------------------------------------------------
+
+#[doc("The base values, extra-bit counts and code lookups for lengths and distances.")]
+pub(pkg) type Tables = {
+  len_base: Vec[Int], len_extra: Vec[Int], len_code: Vec[Int],
+  dist_base: Vec[Int], dist_extra: Vec[Int], dist_code: Vec[Int]
+}
+
+fn len_bases() : Vec[Int] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
+  35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+
+fn len_extras() : Vec[Int] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+  3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+
+fn dist_bases() : Vec[Int] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
+  257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+
+fn dist_extras() : Vec[Int] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+  7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+
+# The last code whose base is at most `x`.
+fn code_of(bases: Vec[Int], x: Int, c: Int) : Int =
+  if c + 1 < vec_length(bases) and vec_get(bases, c + 1) <= x { code_of(bases, x, c + 1) } else { c }
+
+fn len_codes(bases: Vec[Int], len: Int, v: Vec[Int]) : Vec[Int] =
+  if len > 258 { v }
+  else { len_codes(bases, len + 1, vec_push(v, if len < 3 { 0 } else { code_of(bases, len, 0) })) }
+
+# Distances 1..256 index directly; longer ones by (d - 1) >> 7, past 256.
+fn dist_codes(bases: Vec[Int], i: Int, v: Vec[Int]) : Vec[Int] =
+  if i >= 512 { v } else {
+    let d = if i < 256 { i + 1 } else { bit_shl(i - 256, 7) + 1 }
+    dist_codes(bases, i + 1, vec_push(v, code_of(bases, d, 0)))
+  }
+
+#[doc("The DEFLATE length and distance tables.")]
+pub(pkg) fn tables() : Tables = {
+  let lb = len_bases()
+  let db = dist_bases()
+  Tables {
+    len_base: lb, len_extra: len_extras(), len_code: len_codes(lb, 0, vec_reserve(259)),
+    dist_base: db, dist_extra: dist_extras(), dist_code: dist_codes(db, 0, vec_reserve(512))
+  }
+}
+
+fn dist_sym(t: Tables, d: Int) : Int =
+  if d <= 256 { vec_get(t.dist_code, d - 1) } else { vec_get(t.dist_code, 256 + bit_ushr(d - 1, 7)) }
+
+# ---- Bit writer -------------------------------------------------
+
+#[doc("An LSB-first bit writer over a growable byte array; fewer than 32 bits stay pending.")]
+pub(pkg) type Bits = { buf: Array[Byte], pos: Int, acc: Int, n: Int }
+
+fn room(buf: Array[Byte], need: Int) : Array[Byte] / Mutable = {
+  let cap = array_length(buf)
+  if need <= cap { buf } else { array_grow(buf, imin(cap, bit_shl(1, 26)) + need, bin_byte(0)) }
+}
+
+fn put(w: Bits, v: Int, k: Int) : Bits / Mutable = {
+  let acc = bit_or(w.acc, bit_shl(v, w.n))
+  let n = w.n + k
+  if n < 32 { Bits { buf: w.buf, pos: w.pos, acc: acc, n: n } }
+  else {
+    let buf = room(w.buf, w.pos + 8)
+    Bits { buf: bytes_put_le(buf, w.pos, acc, 4), pos: w.pos + 4, acc: bit_ushr(acc, 32), n: n - 32 }
+  }
+}
+
+# Writes the whole bytes of `acc`, leaving fewer than 8 bits pending.
+fn drain(w: Bits) : Bits / Mutable = {
+  let k = w.n / 8
+  let buf = room(w.buf, w.pos + 8)
+  Bits { buf: bytes_put_le(buf, w.pos, w.acc, k), pos: w.pos + k, acc: bit_ushr(w.acc, 8 * k), n: w.n - 8 * k }
+}
+
+#[doc("Pads the pending bits to a byte boundary and writes them.")]
+pub(pkg) fn align(w: Bits) : Bits / Mutable = drain(put(w, 0, bit_and(8 - bit_and(w.n, 7), 7)))
+
+# ---- Blocks -----------------------------------------------------
+
+type Codes = { lcode: Vec[Int], llen: Vec[Int], dcode: Vec[Int], dlen: Vec[Int] }
+
+fn codes_of(llen: Vec[Int], dlen: Vec[Int]) : Codes =
+  Codes { lcode: huffman.codes(llen), llen: llen, dcode: huffman.codes(dlen), dlen: dlen }
+
+fn fixed_lit_len(i: Int) : Int = if i < 144 { 8 } else if i < 256 { 9 } else if i < 280 { 7 } else { 8 }
+
+fn fixed_lengths(i: Int, v: Vec[Int]) : Vec[Int] =
+  if i >= 288 { v } else { fixed_lengths(i + 1, vec_push(v, fixed_lit_len(i))) }
+
+fn fixed_codes() : Codes = codes_of(fixed_lengths(0, vec_reserve(288)), vec_make(30, 5))
+
+# Literal/length frequencies at 0..285, distance frequencies from 286.
+fn bump(f: Vec[Int], k: Int) : Vec[Int] = {
+  let c = vec_get(f, k)
+  vec_set(f, k, c + 1)
+}
+
+fn count_tokens(s: Source, ^toks: Vec[Int], i: Int, nt: Int, f: Vec[Int]) : Vec[Int] =
+  if i >= nt { bump(f, 256) } else {
+    let t = vec_get(toks, i)
+    if t < 256 { count_tokens(s, toks, i + 1, nt, bump(f, t)) }
+    else {
+      let lc = 257 + vec_get(s.tb.len_code, bit_ushr(t, 16))
+      let dc = 286 + dist_sym(s.tb, bit_and(t, 0xFFFF))
+      count_tokens(s, toks, i + 1, nt, bump(bump(f, lc), dc))
+    }
+  }
+
+fn lit_cost(s: Source, f: Vec[Int], c: Codes, i: Int, acc: Int) : Int =
+  if i >= 286 { acc } else {
+    let extra = if i > 256 { vec_get(s.tb.len_extra, i - 257) } else { 0 }
+    lit_cost(s, f, c, i + 1, acc + vec_get(f, i) * (vec_get(c.llen, i) + extra))
+  }
+
+fn dist_cost(s: Source, f: Vec[Int], c: Codes, i: Int, acc: Int) : Int =
+  if i >= 30 { acc }
+  else { dist_cost(s, f, c, i + 1, acc + vec_get(f, 286 + i) * (vec_get(c.dlen, i) + vec_get(s.tb.dist_extra, i))) }
+
+fn body_cost(s: Source, f: Vec[Int], c: Codes) : Int = lit_cost(s, f, c, 0, 0) + dist_cost(s, f, c, 0, 0)
+
+# A token's code and extra bits packed as `bits | count << 56`; at most 48 bits.
+fn token_bits(s: Source, c: Codes, t: Int) : Int =
+  if t < 256 { bit_or(vec_get(c.lcode, t), bit_shl(vec_get(c.llen, t), 56)) } else {
+    let len = bit_ushr(t, 16)
+    let dist = bit_and(t, 0xFFFF)
+    let lc = vec_get(s.tb.len_code, len)
+    let dc = dist_sym(s.tb, dist)
+    let ll = vec_get(c.llen, 257 + lc)
+    let le = vec_get(s.tb.len_extra, lc)
+    let dl = vec_get(c.dlen, dc)
+    let lv = bit_or(vec_get(c.lcode, 257 + lc), bit_shl(len - vec_get(s.tb.len_base, lc), ll))
+    let dv = bit_or(vec_get(c.dcode, dc), bit_shl(dist - vec_get(s.tb.dist_base, dc), dl))
+    bit_or(bit_or(lv, bit_shl(dv, ll + le)), bit_shl(ll + le + dl + vec_get(s.tb.dist_extra, dc), 56))
+  }
+
+# The hot loop keeps fewer than 8 bits pending, so one token never overflows `acc`.
+fn put_tokens(s: Source, c: Codes, ^toks: Vec[Int], w: Bits, i: Int, nt: Int) : Bits / Mutable =
+  if i >= nt { put(w, vec_get(c.lcode, 256), vec_get(c.llen, 256)) } else {
+    let tb = token_bits(s, c, vec_get(toks, i))
+    let acc = bit_or(w.acc, bit_shl(bit_and(tb, low56()), w.n))
+    let n = w.n + bit_ushr(tb, 56)
+    let k = n / 8
+    let buf = room(w.buf, w.pos + 8)
+    let next = Bits { buf: bytes_put_le(buf, w.pos, acc, k), pos: w.pos + k, acc: bit_ushr(acc, 8 * k), n: n - 8 * k }
+    put_tokens(s, c, toks, next, i + 1, nt)
+  }
+
+fn put_raw(s: Source, w: Bits, i: Int, stop: Int) : Bits / Mutable =
+  if i >= stop { w } else {
+    let k = imin(7, stop - i)
+    let buf = room(w.buf, w.pos + 8)
+    put_raw(s, Bits { buf: bytes_put_le(buf, w.pos, vec_get(s.win, i), k), pos: w.pos + k, acc: 0, n: 0 }, i + k, stop)
+  }
+
+fn stored_chunks(s: Source, w: Bits, from: Int, to: Int, last: Bool) : Bits / Mutable = {
+  let len = imin(65535, to - from)
+  let end = from + len >= to
+  let w1 = align(put(w, if last and end { 1 } else { 0 }, 3))
+  let w2 = drain(put(put(w1, len, 16), bit_xor(len, 0xFFFF), 16))
+  let w3 = put_raw(s, w2, from, from + len)
+  if end { w3 } else { stored_chunks(s, w3, from + len, to, last) }
+}
+
+fn stored_cost(w: Bits, len: Int) : Int = {
+  let chunks = if len == 0 { 1 } else { (len + 65534) / 65535 }
+  chunks * 40 + len * 8 + 8 - bit_and(w.n + 3, 7)
+}
+
+#[doc("Writes the `nt` tokens covering input `bs..be` as one block, final when `last`.")]
+pub(pkg) fn emit_block(s: Source, ^toks: Vec[Int], w: Bits, nt: Int, bs: Int, be: Int, last: Bool) : Bits / Mutable = {
+  let f = count_tokens(s, toks, 0, nt, vec_make(316, 0))
+  let dy = plan(f)
+  let fixed = fixed_codes()
+  let fixed_bits = 3 + body_cost(s, f, fixed)
+  let dyn_bits = 3 + dy.bits + body_cost(s, f, dy.codes)
+  let fin = if last { 1 } else { 0 }
+  if stored_cost(w, be - bs) <= imin(fixed_bits, dyn_bits) { stored_chunks(s, w, bs, be, last) }
+  else if dyn_bits < fixed_bits { put_tokens(s, dy.codes, toks, drain(put_header(put(w, fin + 4, 3), dy)), 0, nt) }
+  else { put_tokens(s, fixed, toks, drain(put(w, fin + 2, 3)), 0, nt) }
+}
+
+# ---- Dynamic block header ---------------------------------------
+
+type Plan = {
+  codes: Codes, hlit: Int, hdist: Int, hclen: Int, rle: [Int],
+  cllen: Vec[Int], clcode: Vec[Int], bits: Int
+}
+
+fn cl_order() : Vec[Int] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+
+fn used_len(a: Vec[Int], i: Int, floor: Int) : Int =
+  if i <= floor or vec_get(a, i - 1) != 0 { i } else { used_len(a, i - 1, floor) }
+
+fn used_order(cl: Vec[Int], order: Vec[Int], k: Int) : Int =
+  if k <= 4 or vec_get(cl, vec_get(order, k - 1)) != 0 { k } else { used_order(cl, order, k - 1) }
+
+fn append_n(v: Vec[Int], src: Vec[Int], i: Int, n: Int) : Vec[Int] =
+  if i >= n { v } else { append_n(vec_push(v, vec_get(src, i)), src, i + 1, n) }
+
+fn same_run(a: Vec[Int], i: Int, v: Int, k: Int) : Int =
+  if i + k < vec_length(a) and vec_get(a, i + k) == v { same_run(a, i, v, k + 1) } else { k }
+
+# A code-length symbol in the low 5 bits, its extra value above them.
+fn sym(s: Int, extra: Int) : Int = bit_or(s, bit_shl(extra, 5))
+
+fn zero_run(run: Int, acc: [Int]) : Pair[Int, [Int]] =
+  if run >= 11 { (imin(run, 138), [sym(18, imin(run, 138) - 11), ...acc]) }
+  else if run >= 3 { (run, [sym(17, run - 3), ...acc]) }
+  else { (1, [sym(0, 0), ...acc]) }
+
+fn repeat_run(v: Int, run: Int, acc: [Int]) : Pair[Int, [Int]] =
+  if run >= 3 { (imin(run, 6), [sym(16, imin(run, 6) - 3), ...acc]) } else { (1, [sym(v, 0), ...acc]) }
+
+fn rle(a: Vec[Int], i: Int, acc: [Int]) : [Int] =
+  if i >= vec_length(a) { list_reverse(acc) } else {
+    let v = vec_get(a, i)
+    if v == 0 {
+      let r = zero_run(same_run(a, i, 0, 0), acc)
+      rle(a, i + r.fst, r.snd)
+    } else if i > 0 and vec_get(a, i - 1) == v {
+      let r = repeat_run(v, same_run(a, i, v, 0), acc)
+      rle(a, i + r.fst, r.snd)
+    } else {
+      rle(a, i + 1, [sym(v, 0), ...acc])
+    }
+  }
+
+fn extra_bits(s: Int) : Int = if s == 16 { 2 } else if s == 17 { 3 } else if s == 18 { 7 } else { 0 }
+
+fn count_syms(xs: [Int], f: Vec[Int]) : Vec[Int] = match xs {
+  []        -> f
+  [x, ...t] -> count_syms(t, bump(f, bit_and(x, 31)))
+}
+
+fn rle_bits(xs: [Int], cl: Vec[Int], acc: Int) : Int = match xs {
+  []        -> acc
+  [x, ...t] -> rle_bits(t, cl, acc + vec_get(cl, bit_and(x, 31)) + extra_bits(bit_and(x, 31)))
+}
+
+fn plan(f: Vec[Int]) : Plan = {
+  let llen = huffman.lengths(f, 0, 286, 15)
+  let dlen = huffman.lengths(f, 286, 30, 15)
+  let hlit = used_len(llen, 286, 257)
+  let hdist = used_len(dlen, 30, 1)
+  let items = rle(append_n(append_n(vec_reserve(hlit + hdist), llen, 0, hlit), dlen, 0, hdist), 0, [])
+  let cllen = huffman.lengths(count_syms(items, vec_make(19, 0)), 0, 19, 7)
+  let hclen = used_order(cllen, cl_order(), 19)
+  Plan {
+    codes: codes_of(llen, dlen), hlit: hlit, hdist: hdist, hclen: hclen, rle: items,
+    cllen: cllen, clcode: huffman.codes(cllen), bits: 14 + 3 * hclen + rle_bits(items, cllen, 0)
+  }
+}
+
+fn put_cl_lengths(w: Bits, cl: Vec[Int], order: Vec[Int], k: Int, n: Int) : Bits / Mutable =
+  if k >= n { w } else { put_cl_lengths(put(w, vec_get(cl, vec_get(order, k)), 3), cl, order, k + 1, n) }
+
+fn put_rle(w: Bits, p: Plan, xs: [Int]) : Bits / Mutable = match xs {
+  []        -> w
+  [x, ...t] -> {
+    let s = bit_and(x, 31)
+    put_rle(put(put(w, vec_get(p.clcode, s), vec_get(p.cllen, s)), bit_ushr(x, 5), extra_bits(s)), p, t)
+  }
+}
+
+fn put_header(w: Bits, p: Plan) : Bits / Mutable = {
+  let w1 = put(put(put(w, p.hlit - 257, 5), p.hdist - 1, 5), p.hclen - 4, 4)
+  put_rle(put_cl_lengths(w1, p.cllen, cl_order(), 0, p.hclen), p, p.rle)
+}

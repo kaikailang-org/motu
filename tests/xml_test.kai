@@ -1,0 +1,47 @@
+import motu.xml
+
+test "escape leaves plain text alone" {
+  assert xml.escape("plain text, nothing to do") == "plain text, nothing to do"
+  assert xml.escape("") == ""
+  assert xml.escape("ñandú — café") == "ñandú — café"
+}
+
+test "escape replaces the five markup characters" {
+  assert xml.escape("a < b") == "a &lt; b"
+  assert xml.escape("Tom & Jerry") == "Tom &amp; Jerry"
+  assert xml.escape("x > y") == "x &gt; y"
+  assert xml.escape("say \"hi\"") == "say &quot;hi&quot;"
+  assert xml.escape("it's") == "it&#39;s"
+  assert xml.escape("&amp;") == "&amp;amp;"
+  assert xml.escape("<<&>>") == "&lt;&lt;&amp;&gt;&gt;"
+}
+
+test "escape drops the control characters XML forbids" {
+  assert xml.escape("a\x01b\x0Bc\x1Fd") == "abcd"
+  assert xml.escape("tab\there\nline\r") == "tab\there\nline\r"
+  assert xml.escape("\0") == ""
+}
+
+test "an element with no children closes itself" {
+  assert xml.render(xml.element("br", [], [])) == "<br/>"
+  assert xml.render(xml.element("img", [xml.attr("src", "a.png"), xml.attr("alt", "")], [])) == "<img src=\"a.png\" alt=\"\"/>"
+}
+
+test "attributes and text are escaped, raw markup is not" {
+  let n = xml.element("p", [xml.attr("title", "a \"b\" & <c>")], [xml.text("1 < 2"), xml.raw("<em>x</em>")])
+  assert xml.render(n) == "<p title=\"a &quot;b&quot; &amp; &lt;c&gt;\">1 &lt; 2<em>x</em></p>"
+}
+
+test "nested elements render in order" {
+  let li = (s: String) => xml.element("li", [], [xml.text(s)])
+  let n = xml.element("ol", [], [li("one"), li("two"), li("three")])
+  assert xml.render(n) == "<ol><li>one</li><li>two</li><li>three</li></ol>"
+}
+
+test "documents carry the declaration and an optional doctype" {
+  let root = xml.element("html", [xml.attr("xmlns", "http://www.w3.org/1999/xhtml")], [xml.element("body", [], [])])
+  assert xml.document(root) == "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><body/></html>\n"
+  assert xml.document_with("<!DOCTYPE html>", root) == "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><body/></html>\n"
+}
+
+fn main() : Int = 0
