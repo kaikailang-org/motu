@@ -1,0 +1,25 @@
+import motu.docx
+import motu.markdown
+
+fn part(ps: [(String, String)], name: String) : String = match ps |> list.find(p => p.fst == name) {
+  Some(p) -> p.snd
+  None    -> ""
+}
+
+test "headings, emphasis and footnotes become Word XML" {
+  let doc = markdown.parse("# One\n\nThe *ferry* came.[^1]\n\n[^1]: The **last** one.\n")
+  let ps = docx.parts(Info { title: "B", author: "A", language: "en" }, doc)
+  let body = part(ps, "word/document.xml")
+  assert string.contains(body, "<w:pStyle w:val=\"Heading1\"/>")
+  assert string.contains(body, "<w:i/>")
+  assert string.contains(body, "<w:footnoteReference w:id=\"1\"/>")
+  assert string.contains(part(ps, "word/footnotes.xml"), "<w:footnote w:id=\"1\">")
+  assert string.contains(part(ps, "word/footnotes.xml"), "<w:b/>")
+  assert (ps |> list.map(p => p.fst) |> list.take(1)) == ["[Content_Types].xml"]
+}
+
+test "text is escaped" {
+  let ps = docx.parts(Info { title: "<B&>", author: "", language: "" }, markdown.parse("a < b & c"))
+  assert string.contains(part(ps, "word/document.xml"), "a &lt; b &amp; c")
+  assert string.contains(part(ps, "docProps/core.xml"), "&lt;B&amp;&gt;")
+}

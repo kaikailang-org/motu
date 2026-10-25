@@ -1,0 +1,146 @@
+#[doc("""
+Word documents (Office Open XML) from parsed Markdown: headings, paragraphs,
+emphasis, quotes, lists, code, scene breaks and footnotes. `parts` gives the
+package's files as (path, text); zip them, `[Content_Types].xml` first.
+""")]
+import motu.markdown
+import motu.markdown_html
+import motu.markdown_text
+
+#[doc("A book's title and author, for the document properties.")]
+pub type Info = { title: String, author: String, language: String }
+
+type Run = { text: String, bold: Bool, italic: Bool, code: Bool }
+
+type Note = { label: String, id: Int }
+
+fn esc(s: String) : String = markdown_html.escape(s)
+
+# --- inline runs ---
+
+fn note_id(notes: [Note], label: String) : Int = match notes |> list.find(n => string.to_lower(n.label) == string.to_lower(label)) {
+  Some(n) -> n.id
+  None    -> 0
+}
+
+fn run_xml(text: String, bold: Bool, italic: Bool, code: Bool) : String = {
+  let props = (if bold { "<w:b/>" } else { "" }) ++ (if italic { "<w:i/>" } else { "" })
+    ++ (if code { "<w:rFonts w:ascii=\"Menlo\" w:hAnsi=\"Menlo\"/>" } else { "" })
+  let rpr = if props == "" { "" } else { "<w:rPr>#{props}</w:rPr>" }
+  "<w:r>#{rpr}<w:t xml:space=\"preserve\">#{esc(text)}</w:t></w:r>"
+}
+
+fn inlines_xml(xs: [Inline], notes: [Note], bold: Bool, italic: Bool) : String =
+  string.join(xs | (x => inline_xml(x, notes, bold, italic)), "")
+
+fn inline_xml(x: Inline, notes: [Note], bold: Bool, italic: Bool) : String = match x {
+  Text(s)           -> run_xml(s, bold, italic, false)
+  Emph(kids)        -> inlines_xml(kids, notes, bold, true)
+  Strong(kids)      -> inlines_xml(kids, notes, true, italic)
+  Code(s)           -> run_xml(s, bold, italic, true)
+  Link(kids, _, _)  -> inlines_xml(kids, notes, bold, italic)
+  Image(alt, _, _)  -> run_xml("[#{markdown_text.inlines_text(alt)}]", bold, italic, false)
+  FootnoteRef(l)    -> {
+    let id = note_id(notes, l)
+    if id == 0 { run_xml("[^#{l}]", bold, italic, false) }
+    else { "<w:r><w:rPr><w:rStyle w:val=\"FootnoteReference\"/></w:rPr><w:footnoteReference w:id=\"#{id}\"/></w:r>" }
+  }
+  SoftBreak         -> run_xml(" ", bold, italic, false)
+  HardBreak         -> "<w:r><w:br/></w:r>"
+}
+
+# --- blocks ---
+
+fn para(style: String, body: String) : String =
+  if style == "" { "<w:p>#{body}</w:p>" } else { "<w:p><w:pPr><w:pStyle w:val=\"#{style}\"/></w:pPr>#{body}</w:p>" }
+
+fn item_xml(marker: String, blocks: [Block], notes: [Note], depth: Int) : String = match blocks {
+  [Paragraph(xs), ...rest] -> para("ListParagraph", run_xml(marker, false, false, false) ++ inlines_xml(xs, notes, false, false))
+    ++ string.join(rest | (b => block_xml(b, notes, "ListParagraph", depth + 1)), "")
+  _ -> para("ListParagraph", run_xml(marker, false, false, false)) ++ string.join(blocks | (b => block_xml(b, notes, "ListParagraph", depth + 1)), "")
+}
+
+fn block_xml(b: Block, notes: [Note], quote_style: String, depth: Int) : String = match b {
+  Heading(n, xs)            -> para("Heading#{if n > 6 { 6 } else { n }}", inlines_xml(xs, notes, false, false))
+  Paragraph(xs)             -> para(quote_style, inlines_xml(xs, notes, false, false))
+  Quote(bs)                 -> string.join(bs | (x => block_xml(x, notes, "Quote", depth)), "")
+  BulletList(_, items)      -> string.join(items | (it => item_xml("•\t", it, notes, depth)), "")
+  OrderedList(s, _, items)  -> string.join(list.enumerate(items) | (p => item_xml("#{s + p.fst}.\t", p.snd, notes, depth)), "")
+  CodeBlock(_, text)        -> string.join(string.lines(text) | (l => para("Code", run_xml(l, false, false, true))), "")
+  ThematicBreak             -> para("SceneBreak", run_xml("*   *   *", false, false, false))
+  Comment(_)                -> ""
+  FootnoteDef(_, _)         -> ""
+}
+
+fn defs(bs: [Block]) : [(String, [Block])] = bs || (b => match b {
+  FootnoteDef(l, body) -> [(l, body)]
+  Quote(inner)         -> defs(inner)
+  _                    -> []
+})
+
+#[doc("The body XML of `doc`, and its footnotes XML.")]
+pub fn body(doc: Doc) : (String, String) = {
+  let ds = defs(doc.blocks)
+  let notes = list.enumerate(ds) | (p => Note { label: p.snd.fst, id: p.fst + 1 })
+  let main = string.join(doc.blocks | (b => block_xml(b, notes, "", 0)), "")
+  let fns = string.join(list.enumerate(ds) | (p => {
+    let inner = string.join(p.snd.snd | (b => block_xml(b, notes, "FootnoteText", 0)), "")
+    "<w:footnote w:id=\"#{p.fst + 1}\">#{inner}</w:footnote>"
+  }), "")
+  (main, fns)
+}
+
+# --- the package ---
+
+const W : String = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+const DECL : String = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+
+fn content_types() : String =
+  DECL ++ "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/><Override PartName=\"/word/footnotes.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml\"/><Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/></Types>"
+
+fn root_rels() : String =
+  DECL ++ "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/></Relationships>"
+
+fn document_rels() : String =
+  DECL ++ "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes\" Target=\"footnotes.xml\"/></Relationships>"
+
+fn style(id: String, name: String, ppr: String, rpr: String) : String =
+  "<w:style w:type=\"paragraph\" w:styleId=\"#{id}\"><w:name w:val=\"#{name}\"/><w:basedOn w:val=\"Normal\"/><w:pPr>#{ppr}</w:pPr><w:rPr>#{rpr}</w:rPr></w:style>"
+
+fn heading_style(n: Int) : String = {
+  let size = match n { 1 -> 36; 2 -> 30; 3 -> 26; _ -> 24 }
+  style("Heading#{n}", "heading #{n}", "<w:keepNext/><w:spacing w:before=\"360\" w:after=\"120\"/><w:outlineLvl w:val=\"#{n - 1}\"/>", "<w:b/><w:sz w:val=\"#{size}\"/>")
+}
+
+fn styles(language: String) : String =
+  DECL ++ "<w:styles #{W}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Georgia\" w:hAnsi=\"Georgia\"/><w:sz w:val=\"24\"/><w:lang w:val=\"#{esc(language)}\"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after=\"120\" w:line=\"360\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>"
+    ++ "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>"
+    ++ string.join([1, 2, 3, 4, 5, 6] | heading_style, "")
+    ++ style("Quote", "Quote", "<w:ind w:left=\"720\" w:right=\"720\"/>", "<w:i/>")
+    ++ style("ListParagraph", "List Paragraph", "<w:ind w:left=\"720\" w:hanging=\"360\"/>", "")
+    ++ style("Code", "Code", "<w:spacing w:after=\"0\"/>", "<w:rFonts w:ascii=\"Menlo\" w:hAnsi=\"Menlo\"/><w:sz w:val=\"20\"/>")
+    ++ style("SceneBreak", "Scene Break", "<w:jc w:val=\"center\"/><w:spacing w:before=\"240\" w:after=\"240\"/>", "")
+    ++ style("FootnoteText", "footnote text", "<w:spacing w:after=\"0\"/>", "<w:sz w:val=\"20\"/>")
+    ++ "<w:style w:type=\"character\" w:styleId=\"FootnoteReference\"><w:name w:val=\"footnote reference\"/><w:rPr><w:vertAlign w:val=\"superscript\"/></w:rPr></w:style>"
+    ++ "</w:styles>"
+
+fn footnotes_xml(fns: String) : String =
+  DECL ++ "<w:footnotes #{W}><w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote><w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>#{fns}</w:footnotes>"
+
+fn core(info: Info) : String =
+  DECL ++ "<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>#{esc(info.title)}</dc:title><dc:creator>#{esc(info.author)}</dc:creator><dc:language>#{esc(info.language)}</dc:language></cp:coreProperties>"
+
+#[doc("The files of a .docx package for `doc`, in the order a zip should hold them.")]
+pub fn parts(info: Info, doc: Doc) : [(String, String)] = {
+  let (main, fns) = body(doc)
+  let document = DECL ++ "<w:document #{W}><w:body>#{main}<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>"
+  [
+    ("[Content_Types].xml", content_types()),
+    ("_rels/.rels", root_rels()),
+    ("word/document.xml", document),
+    ("word/_rels/document.xml.rels", document_rels()),
+    ("word/styles.xml", styles(if info.language == "" { "en" } else { info.language })),
+    ("word/footnotes.xml", footnotes_xml(fns)),
+    ("docProps/core.xml", core(info)),
+  ]
+}
