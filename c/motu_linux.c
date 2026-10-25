@@ -794,6 +794,7 @@ void motu_init(void *ud, const char *app_name) {
   g_ud = ud;
   load_libraries();
   g_set_application_name(app_name);
+  if (!g_get_prgname()) g_set_prgname(app_name);
   Sync ready = {0, 0};
   pthread_attr_t attr;
   pthread_attr_init(&attr);

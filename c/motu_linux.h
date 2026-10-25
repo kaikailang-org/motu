@@ -34,6 +34,8 @@ typedef void (*AsyncDone)(void *source, void *result, void *ud);
   X(unsigned, g_idle_add_full, (int, int (*)(void *), void *, void (*)(void *))) \
   X(void, g_free, (void *)) \
   X(void, g_set_application_name, (const char *)) \
+  X(void, g_set_prgname, (const char *)) \
+  X(const char *, g_get_prgname, (void)) \
   X(void, g_error_free, (GError *)) \
   X(int, g_file_get_contents, (const char *, char **, size_t *, GError **)) \
   X(char *, g_uri_unescape_string, (const char *, const char *)) \
