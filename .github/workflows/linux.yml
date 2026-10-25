@@ -1,0 +1,55 @@
+name: linux
+
+on:
+  push:
+    branches: [main, linux-shim]
+  workflow_dispatch:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK 4, WebKitGTK 6.0 and Xvfb
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libgtk-4-1 libwebkitgtk-6.0-4 xvfb
+
+      - name: Install kai
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/kaikailang-org/kaikai/main/install.sh | sh
+          echo "$HOME/.kaikai/bin" >> "$GITHUB_PATH"
+
+      - name: Compile the shim with warnings
+        run: for f in c/motu_linux.c c/motu_linux_services.c; do cc -std=c99 -Wall -Wextra -Werror -Ic -c "$f" -o /tmp/shim.o; done
+
+      - name: Build
+        run: |
+          kai --version
+          kai build examples/hello/main.kai -o build/hello
+
+      - name: Allow the web process sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Self-test
+        id: selftest
+        run: |
+          MOTU_PAGE='index.html#selftest' xvfb-run -a timeout 60 ./build/hello | tee selftest.txt
+          grep -E '^Hello, selftest, from kaikai \| 2000 pings: [0-9.]+ us each \| error path: unknown command nope \| slow: cancelled after [0-9]+ ms$' selftest.txt
+
+      - name: Shim smoke test
+        if: success() || steps.selftest.outcome == 'failure'
+        run: |
+          cc -std=c99 -Wall -Wextra -Ic -o build/smoke tests/linux_smoke.c c/motu_linux.c c/motu_linux_services.c -lpthread
+          xvfb-run -a timeout 60 ./build/smoke
+
+      - name: Backtrace
+        if: failure() && steps.selftest.outcome == 'failure'
+        run: |
+          sudo apt-get install -y -q --no-install-recommends gdb
+          MOTU_PAGE='index.html#selftest' xvfb-run -a timeout 90 gdb -q -batch -ex run -ex 'thread apply all bt 25' ./build/hello 2>&1 | tail -250
