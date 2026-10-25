@@ -82,6 +82,15 @@ at run time. kaikai already has that boundary in the type system.
   macOS, C over GTK 4 and WebKitGTK 6.0 on Linux. Everything above the shim is
   kaikai.
 
+### Measured so far (macOS, arm64, native backend)
+
+- Empty command round trip, page → kaikai fiber → page: 106–122 µs over 2 000 calls (M).
+- A command sleeping 5 s, cancelled by the page after 50 ms: rejected after 52 ms (M).
+- Print to PDF through the webview: an 18-page paginated file from three chapters (M).
+- A Markdown page and a binary file's line sent through the channel: invalid UTF-8 is
+  repaired with U+FFFD in the shim, because WebKit drops a script that is not valid
+  UTF-8 (M).
+
 ### Why an own shim, not `webview/webview`
 
 `webview/webview` gives a window, `bind`, `eval` and `dispatch` on the three
@@ -154,7 +163,7 @@ A writing studio for long books, modelled on Scrivener:
 | export with a progress bar, a search that the user abandons | `motu.task`: a command runs on its own fiber in the window's nursery; `cancel` from the page cancels it; progress as events | kaikai fibers and `Cancel` |
 | saving without losing work | `motu.project`: the `Project` effect, confined to the project root; atomic write (temporary file, flush, rename) | kaikai `fs`; a flush to disk |
 | the project as a bundle of files | a documented bundle layout (below) and recent-projects list in the application data directory | `fs`, `encoding.toml` |
-| project search | full-text index over the documents, rebuilt from the files when missing | kohau SQLite with FTS5 |
+| project search | `motu.search`: a full-text index in memory, rebuilt from the files when a project opens | none |
 | EPUB, DOCX and backups | zip writer: stored entries and CRC-32 for EPUB, deflate for backups | kaikai stdlib (missing) |
 | compile reads the manuscript | Markdown parser to a syntax tree (CommonMark plus footnotes) | kaikai stdlib or an ecosystem package (missing) |
 | EPUB and DOCX contents | XML writer with escaping | small; in Motu or stdlib |
@@ -177,7 +186,6 @@ My Novel.book/
   notes/<uuid>.md       its notes
   snapshots/<uuid>/<utc-timestamp>.md
   research/<uuid>.<ext> imported images and PDFs
-  index.db              search index; derived, rebuilt when absent
 ```
 
 ```markdown
@@ -199,8 +207,9 @@ through Dropbox or git and survives the application. The front matter keeps a
 document's metadata with its text; `project.toml` holds only what spans
 documents. Files are named by a stable id, so reordering or renaming in the
 binder rewrites `project.toml` and the title, never a file name. Comments are
-written inline as `<!-- … -->`, which every Markdown renderer drops. The index
-is a cache: deleting it loses nothing.
+written inline as `<!-- … -->`, which every Markdown renderer drops. The search
+index lives in memory and is rebuilt on open, so the bundle holds nothing
+derived.
 
 ### What stage 1 measures
 
@@ -227,7 +236,7 @@ capability, and they are what `motu new` offers as templates.
 | `hello` | a window that calls one command and shows the reply | window, scheme, channel | 1 |
 | `md-viewer` | open or drop a Markdown file, read it rendered, reload, print to PDF | menus, dialogs, file drop, appearance, Markdown parser, PDF | 2, 5 |
 | `file-finder` | pick a folder, find files by name and content as you type, open or reveal a result | streamed results, cancellation on each keystroke, `motu.shell` | 3 |
-| `notes` | a folder of Markdown notes with autosave and full-text search | `Project` confinement, atomic writes, autosave timer, kohau search | 4 |
+| `notes` | a folder of Markdown notes with autosave and full-text search | `Project` confinement, atomic writes, autosave, in-memory search | 4 |
 | `md-to-epub` | a folder of chapters out as EPUB and DOCX, with a progress bar | compile pipeline, zip and XML writers, progress events | 5 |
 | `book` | the Scrivener-class studio above | all of stage 1 | 7 |
 
@@ -243,7 +252,7 @@ capability, and they are what `motu new` offers as templates.
 3. **Tasks.** Per-window nurseries, cancellation from the page, progress
    events, an autosave timer, `motu.shell`. Closes with `file-finder`.
 4. **Project.** The `Project` effect and its confinement, atomic writes, the
-   bundle, recent projects, search through kohau. Closes with `notes`.
+   bundle, recent projects, in-memory search. Closes with `notes`.
 5. **Compile.** The Markdown parser, zip and XML writers; out to Markdown,
    HTML, EPUB 3, DOCX, and PDF through the webview. Closes with `md-to-epub`
    and `md-viewer` rendering.
@@ -301,12 +310,12 @@ can own the state behind it.
 | need | where | state |
 |---|---|---|
 | C calls kaikai (`extern "C"` with a body), from a GUI thread too | kaikai | shipped (R); verified in stage 0 |
-| Objective-C sources and macOS frameworks in `[native]` | kaikai | missing |
+| Objective-C sources and macOS frameworks in `[native]` | kaikai | not needed: the shims are C over the Objective-C runtime and load their frameworks with `dlopen` (M) |
+| `extern "C"` exports declared in an imported module of a package | kaikai | missing at link today (M); fix in progress |
 | zip writer (stored + CRC-32; deflate) | kaikai stdlib | missing |
-| flush a file to disk (`fsync`) for atomic saves | kaikai stdlib | missing |
+| flush a file to disk (`fsync`) for atomic saves | Motu shim | `motu_fsync_path` (`F_FULLFSYNC` on macOS) |
 | XML writer | kaikai stdlib or Motu | missing |
 | Markdown parser (CommonMark plus footnotes) to a syntax tree | kaikai stdlib or an ecosystem package | missing |
-| SQLite with FTS5 | kohau | driver ships (R); FTS5 depends on the system library |
 | Windows runtime | kaikai | not started; spike numbers above |
 
 Each missing kaikai piece becomes an issue in `lnds/kaikai` when its
