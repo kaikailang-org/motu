@@ -1,0 +1,341 @@
+import motu.markdown
+import motu.markdown_html
+
+fn h(s: String) : String = to_html(parse(s))
+
+fn p(s: String) : String = "<p>#{s}</p>\n"
+
+# ---- headings ----
+
+test "atx headings of every level" {
+  assert h("# One") == "<h1 id=\"one\">One</h1>\n"
+  assert h("###### Six") == "<h6 id=\"six\">Six</h6>\n"
+  assert h("####### seven") == p("####### seven")
+  assert h("#5 bolt") == p("#5 bolt")
+  assert h("#") == "<h1 id=\"section\"></h1>\n"
+}
+
+test "atx closing sequence is stripped" {
+  assert h("## Two ##") == "<h2 id=\"two\">Two</h2>\n"
+  assert h("# Sharp#") == "<h1 id=\"sharp\">Sharp#</h1>\n"
+  assert h("  ### Indented ###   ") == "<h3 id=\"indented\">Indented</h3>\n"
+}
+
+test "setext headings" {
+  assert h("Title\n=====") == "<h1 id=\"title\">Title</h1>\n"
+  assert h("Sub\n---") == "<h2 id=\"sub\">Sub</h2>\n"
+  assert h("Two\nlines\n===") == "<h1 id=\"two-lines\">Two\nlines</h1>\n"
+}
+
+test "heading ids are slugs and unique" {
+  assert h("# Hello, *World*!") == "<h1 id=\"hello-world\">Hello, <em>World</em>!</h1>\n"
+  assert h("# Intro\n# Intro\n# Intro") ==
+    "<h1 id=\"intro\">Intro</h1>\n<h1 id=\"intro-1\">Intro</h1>\n<h1 id=\"intro-2\">Intro</h1>\n"
+  assert slug("Año Nuevo") == "año-nuevo"
+}
+
+# ---- paragraphs and breaks ----
+
+test "paragraphs and soft breaks" {
+  assert h("a\nb\n\nc") == p("a\nb") ++ p("c")
+  assert h("   lead") == p("lead")
+  assert h("\n\n\nx\n\n\n") == p("x")
+}
+
+test "hard breaks" {
+  assert h("a  \nb") == p("a<br />\nb")
+  assert h("a\\\nb") == p("a<br />\nb")
+  assert h("a \nb") == p("a\nb")
+  assert h("end  ") == p("end")
+}
+
+test "thematic breaks" {
+  assert h("***") == "<hr />\n"
+  assert h("- - -") == "<hr />\n"
+  assert h("___") == "<hr />\n"
+  assert h("--") == p("--")
+  assert h("a\n\n***\nb") == p("a") ++ "<hr />\n" ++ p("b")
+}
+
+# ---- block quotes ----
+
+test "block quotes nest" {
+  assert h("> a") == "<blockquote>\n" ++ p("a") ++ "</blockquote>\n"
+  assert h("> a\n>> b") ==
+    "<blockquote>\n" ++ p("a") ++ "<blockquote>\n" ++ p("b") ++ "</blockquote>\n</blockquote>\n"
+  assert h(">no space") == "<blockquote>\n" ++ p("no space") ++ "</blockquote>\n"
+}
+
+test "block quote lazy continuation" {
+  assert h("> a\nb") == "<blockquote>\n" ++ p("a\nb") ++ "</blockquote>\n"
+  assert h("> a\n\nb") == "<blockquote>\n" ++ p("a") ++ "</blockquote>\n" ++ p("b")
+}
+
+# ---- lists ----
+
+test "tight bullet list" {
+  assert h("- a\n- b") == "<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n"
+  assert h("* a\n* b") == "<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n"
+  assert h("+ a") == "<ul>\n<li>a</li>\n</ul>\n"
+}
+
+test "loose bullet list" {
+  assert h("- a\n\n- b") == "<ul>\n<li>\n" ++ p("a") ++ "</li>\n<li>\n" ++ p("b") ++ "</li>\n</ul>\n"
+  assert h("- a\n\n  more\n- b") ==
+    "<ul>\n<li>\n" ++ p("a") ++ p("more") ++ "</li>\n<li>\n" ++ p("b") ++ "</li>\n</ul>\n"
+}
+
+test "ordered lists keep their start" {
+  assert h("1. a\n2. b") == "<ol>\n<li>a</li>\n<li>b</li>\n</ol>\n"
+  assert h("3. a\n4. b") == "<ol start=\"3\">\n<li>a</li>\n<li>b</li>\n</ol>\n"
+  assert h("1) a\n2) b") == "<ol>\n<li>a</li>\n<li>b</li>\n</ol>\n"
+  match parse("7. x").blocks {
+    [OrderedList(n, tight, _)] -> { assert n == 7 and tight }
+    _ -> { assert false }
+  }
+}
+
+test "nested lists" {
+  assert h("- a\n  - b\n  - c\n- d") ==
+    "<ul>\n<li>a\n<ul>\n<li>b</li>\n<li>c</li>\n</ul>\n</li>\n<li>d</li>\n</ul>\n"
+  assert h("1. a\n   1. b") == "<ol>\n<li>a\n<ol>\n<li>b</li>\n</ol>\n</li>\n</ol>\n"
+}
+
+test "a new bullet character starts a new list" {
+  assert h("- a\n* b") == "<ul>\n<li>a</li>\n</ul>\n<ul>\n<li>b</li>\n</ul>\n"
+}
+
+test "only an ordered item starting at 1 interrupts a paragraph" {
+  assert h("text\n2. no") == p("text\n2. no")
+  assert h("text\n1. yes") == p("text") ++ "<ol>\n<li>yes</li>\n</ol>\n"
+  assert h("text\n- yes") == p("text") ++ "<ul>\n<li>yes</li>\n</ul>\n"
+}
+
+test "list item lazy continuation" {
+  assert h("- a\nb") == "<ul>\n<li>a\nb</li>\n</ul>\n"
+}
+
+test "list inside a quote" {
+  assert h("> - a\n> - b") == "<blockquote>\n<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n</blockquote>\n"
+}
+
+test "quote inside a list" {
+  assert h("- a\n  > q\n- b") ==
+    "<ul>\n<li>a\n<blockquote>\n" ++ p("q") ++ "</blockquote>\n</li>\n<li>b</li>\n</ul>\n"
+}
+
+test "code inside a list item" {
+  assert h("- a\n\n  ```\n  x\n  ```") ==
+    "<ul>\n<li>\n" ++ p("a") ++ "<pre><code>x\n</code></pre>\n</li>\n</ul>\n"
+}
+
+test "empty list item" {
+  assert h("-\n- b") == "<ul>\n<li></li>\n<li>b</li>\n</ul>\n"
+}
+
+# ---- code ----
+
+test "fenced code with info string" {
+  assert h("```js\nlet a = 1 < 2;\n```") ==
+    "<pre><code class=\"language-js\">let a = 1 &lt; 2;\n</code></pre>\n"
+  assert h("~~~ python extra\nprint()\n~~~") ==
+    "<pre><code class=\"language-python\">print()\n</code></pre>\n"
+  match parse("```rust ignore\nx\n```").blocks {
+    [CodeBlock(info, text)] -> { assert info == "rust ignore" and text == "x\n" }
+    _ -> { assert false }
+  }
+}
+
+test "fences close only on a long enough fence of the same kind" {
+  assert h("````\n```\n~~~\n````") == "<pre><code>```\n~~~\n</code></pre>\n"
+  assert h("```\nopen\n\nto the end") == "<pre><code>open\n\nto the end\n</code></pre>\n"
+  assert h("  ```\n  a\n b\nc\n  ```") == "<pre><code>a\nb\nc\n</code></pre>\n"
+  assert h("```\n```") == "<pre><code></code></pre>\n"
+}
+
+test "indented code" {
+  assert h("    code\n      more\n\n    tail\n\npara") ==
+    "<pre><code>code\n  more\n\ntail\n</code></pre>\n" ++ p("para")
+  assert h("\tcode") == "<pre><code>code\n</code></pre>\n"
+  assert h("para\n    not code") == p("para\nnot code")
+}
+
+# ---- comments ----
+
+test "comment blocks are kept in the tree and dropped from HTML" {
+  assert h("<!-- note -->\n\npara") == p("para")
+  assert h("<!--\nmulti\nline\n-->\nafter") == p("after")
+  assert h("<!-- a --> tail") == p("tail")
+  match parse("<!-- note -->").blocks {
+    [Comment(c)] -> { assert c == "note" }
+    _ -> { assert false }
+  }
+}
+
+test "inline comments are dropped" {
+  assert h("a <!-- hidden --> b") == p("a  b")
+  assert h("a <!-- over\ntwo lines --> b") == p("a  b")
+  assert h("a <!-- open") == p("a &lt;!-- open")
+}
+
+# ---- inlines ----
+
+test "emphasis and strong" {
+  assert h("*em* _em_ **st** __st__") ==
+    p("<em>em</em> <em>em</em> <strong>st</strong> <strong>st</strong>")
+  assert h("***both***") == p("<em><strong>both</strong></em>")
+}
+
+test "intraword underscore does not emphasise, star does" {
+  assert h("foo_bar_baz") == p("foo_bar_baz")
+  assert h("snake_case_name and __init__") == p("snake_case_name and <strong>init</strong>")
+  assert h("foo*bar*baz") == p("foo<em>bar</em>baz")
+}
+
+test "nested emphasis" {
+  assert h("**a *b* c**") == p("<strong>a <em>b</em> c</strong>")
+  assert h("*a **b** c*") == p("<em>a <strong>b</strong> c</em>")
+  assert h("*foo**bar**baz*") == p("<em>foo<strong>bar</strong>baz</em>")
+  assert h("_a *b_ c*") == p("<em>a *b</em> c*")
+}
+
+test "unclosed delimiters stay literal" {
+  assert h("*unclosed") == p("*unclosed")
+  assert h("**open *one*") == p("**open <em>one</em>")
+  assert h("a * b * c") == p("a * b * c")
+  assert h("**bold*") == p("*<em>bold</em>")
+}
+
+test "emphasis next to punctuation" {
+  assert h("\u{201C}_quoted_\u{201D}") == p("\u{201C}<em>quoted</em>\u{201D}")
+  assert h("(*paren*)") == p("(<em>paren</em>)")
+  assert h("*word*\u{2014}dash") == p("<em>word</em>\u{2014}dash")
+}
+
+test "code spans" {
+  assert h("`code`") == p("<code>code</code>")
+  assert h("`` a ` b ``") == p("<code>a ` b</code>")
+  assert h("`<tag>`") == p("<code>&lt;tag&gt;</code>")
+  assert h("`*not em*`") == p("<code>*not em*</code>")
+  assert h("unmatched ` tick") == p("unmatched ` tick")
+  assert h("`a\nb`") == p("<code>a b</code>")
+}
+
+test "links" {
+  assert h("[text](http://x.org)") == p("<a href=\"http://x.org\">text</a>")
+  assert h("[t](/u \"The title\")") == p("<a href=\"/u\" title=\"The title\">t</a>")
+  assert h("[t](</with space>)") == p("<a href=\"/with%20space\">t</a>")
+  assert h("[*em* link](u)") == p("<a href=\"u\"><em>em</em> link</a>")
+  assert h("[a [b] c](u)") == p("<a href=\"u\">a [b] c</a>")
+  assert h("[no link]") == p("[no link]")
+  assert h("[half](") == p("[half](")
+  assert h("[p](a(b)c)") == p("<a href=\"a(b)c\">p</a>")
+}
+
+test "unsafe link schemes are neutralised" {
+  assert h("[x](javascript:alert(1))") == p("<a href=\"#\">x</a>")
+  assert h("[x](JavaScript:alert(1))") == p("<a href=\"#\">x</a>")
+}
+
+test "images" {
+  assert h("![a *cat*](cat.png)") == p("<img src=\"cat.png\" alt=\"a cat\" />")
+  assert h("![x](i.png 'T')") == p("<img src=\"i.png\" alt=\"x\" title=\"T\" />")
+  assert h("!not an image") == p("!not an image")
+}
+
+test "autolinks" {
+  assert h("<https://kaikai-lang.org>") == p("<a href=\"https://kaikai-lang.org\">https://kaikai-lang.org</a>")
+  assert h("<ana@example.com>") == p("<a href=\"mailto:ana@example.com\">ana@example.com</a>")
+  assert h("<not a link>") == p("&lt;not a link&gt;")
+}
+
+test "backslash escapes" {
+  assert h("\\*not em\\*") == p("*not em*")
+  assert h("\\\\") == p("\\")
+  assert h("\\a") == p("\\a")
+  assert h("\\[x](y)") == p("[x](y)")
+  assert h("\\# no heading") == p("# no heading")
+}
+
+test "HTML is escaped" {
+  assert h("a < b & \"c\" > d") == p("a &lt; b &amp; &quot;c&quot; &gt; d")
+  assert h("<div>raw</div>") == p("&lt;div&gt;raw&lt;/div&gt;")
+  assert escape("<&>\"") == "&lt;&amp;&gt;&quot;"
+}
+
+test "character references" {
+  assert h("&copy; &#65; &#x42; &bogus; &amp;") == p("\u{A9} A B &amp;bogus; &amp;")
+}
+
+# ---- footnotes ----
+
+test "footnote reference and definition" {
+  assert h("x[^1]\n\n[^1]: note") ==
+    p("x<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\">1</a></sup>")
+    ++ "<section class=\"footnotes\">\n<ol>\n<li id=\"fn-1\">\n"
+    ++ "<p>note <a href=\"#fnref-1\" class=\"footnote-backref\">\u{21A9}</a></p>\n"
+    ++ "</li>\n</ol>\n</section>\n"
+}
+
+test "footnotes are numbered by first reference" {
+  let out = h("b[^b] a[^a] b again[^b]\n\n[^a]: first defined\n[^b]: second defined")
+  assert contains(out, "<a href=\"#fn-b\" id=\"fnref-b\">1</a>")
+  assert contains(out, "<a href=\"#fn-a\" id=\"fnref-a\">2</a>")
+  assert contains(out, "<a href=\"#fn-b\" id=\"fnref-b-2\">1</a>")
+  let b_at = index_of(out, "<li id=\"fn-b\">") ?? 0
+  let a_at = index_of(out, "<li id=\"fn-a\">") ?? 0
+  assert b_at > 0 and a_at > b_at
+  assert contains(out, "<a href=\"#fnref-b\" class=\"footnote-backref\">\u{21A9}</a> <a href=\"#fnref-b-2\" class=\"footnote-backref\">\u{21A9}<sup>2</sup></a></p>")
+}
+
+test "footnote definitions take indented continuation" {
+  match parse("[^n]: one\ncontinued\n\n    two\n\nafter").blocks {
+    [FootnoteDef(label, [Paragraph(a), Paragraph(b)]), Paragraph(c)] -> {
+      assert label == "n"
+      assert a == [Text("one"), SoftBreak, Text("continued")]
+      assert b == [Text("two")]
+      assert c == [Text("after")]
+    }
+    _ -> { assert false }
+  }
+}
+
+test "undefined and unreferenced footnotes" {
+  assert h("x[^nope]") == p("x[^nope]")
+  assert h("plain\n\n[^unused]: never cited") == p("plain")
+}
+
+test "footnote labels match without case" {
+  assert contains(h("x[^Note]\n\n[^note]: n"), "id=\"fn-note\"")
+}
+
+# ---- documents ----
+
+test "CRLF input parses like LF" {
+  assert h("# T\r\n\r\npara\r\nline\r\n") == h("# T\n\npara\nline\n")
+  assert h("a\rb") == p("a\nb")
+  assert h("\u{FEFF}# T") == "<h1 id=\"t\">T</h1>\n"
+}
+
+test "the tree is typed" {
+  assert parse("Hi *you*").blocks == [Paragraph([Text("Hi "), Emph([Text("you")])])]
+  assert parse("[l](u \"t\")").blocks == [Paragraph([Link([Text("l")], "u", "t")])]
+  assert parse("a[^1]").blocks == [Paragraph([Text("a"), FootnoteRef("1")])]
+}
+
+test "a footnote may cite another note" {
+  let out = h("a[^x]\n\n[^x]: see[^y]\n[^y]: inner")
+  assert contains(out, "<li id=\"fn-x\">")
+  assert contains(out, "<a href=\"#fn-y\" id=\"fnref-y\">2</a>")
+  assert contains(out, "<li id=\"fn-y\">\n<p>inner")
+}
+
+test "quote inside a list inside a quote" {
+  assert h("> - a\n>   > deep\n> - b") ==
+    "<blockquote>\n<ul>\n<li>a\n<blockquote>\n" ++ p("deep") ++ "</blockquote>\n</li>\n<li>b</li>\n</ul>\n</blockquote>\n"
+}
+
+test "comments inside containers" {
+  assert h("- a\n\n  <!-- why -->\n- b") == "<ul>\n<li>\n" ++ p("a") ++ "</li>\n<li>\n" ++ p("b") ++ "</li>\n</ul>\n"
+  assert h("> <!-- c -->\n> q") == "<blockquote>\n" ++ p("q") ++ "</blockquote>\n"
+}

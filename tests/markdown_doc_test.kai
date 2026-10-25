@@ -1,0 +1,106 @@
+import fs.file
+import encoding.toml
+import motu.markdown
+import motu.markdown_html
+import motu.markdown_text
+
+fn chapter() : String / File = file.read("tests/data/harbour.md")
+
+# ---- front matter ----
+
+test "front matter is split from the body" {
+  let (fm, body) = split_front_matter("+++\ntitle = \"T\"\n+++\n# Body\n")
+  assert fm == "title = \"T\"\n"
+  assert body == "# Body\n"
+}
+
+test "a document without front matter keeps its whole text" {
+  assert split_front_matter("# Body\n+++\n") == ("", "# Body\n+++\n")
+  assert split_front_matter("+++ not a fence\n+++\n") == ("", "+++ not a fence\n+++\n")
+  assert split_front_matter("+++\nunclosed = 1\n") == ("", "+++\nunclosed = 1\n")
+  assert split_front_matter("") == ("", "")
+}
+
+test "front matter with CRLF line endings" {
+  let (fm, body) = split_front_matter("+++\r\nn = 1\r\n+++\r\ntext\r\n")
+  assert fm == "n = 1\r\n"
+  assert body == "text\r\n"
+}
+
+test "front matter decodes as TOML" {
+  match front_matter("+++\ntitle = \"The harbour\"\ntarget = 3000\n+++\nbody") {
+    Ok(toml.TTbl(ps)) -> {
+      assert toml.pairs_get(ps, "title") == Some(toml.TStr("The harbour"))
+      assert toml.pairs_get(ps, "target") == Some(toml.TInt(3000))
+    }
+    _ -> { assert false }
+  }
+  assert front_matter("no front matter") == Ok(toml.TTbl([]))
+  match front_matter("+++\nbroken = \n+++\n") {
+    Err(msg) -> { assert contains(msg, "line 1") }
+    Ok(_)    -> { assert false }
+  }
+}
+
+test "render leaves the front matter out" {
+  assert render("+++\ntitle = \"x\"\n+++\nHello") == "<p>Hello</p>\n"
+  assert render("Hello") == "<p>Hello</p>\n"
+}
+
+# ---- plain text and word counts ----
+
+test "plain text drops markup and comments" {
+  let d = parse("# Title\n\nSome *em* and `code`[^1].\n\n<!-- hidden -->\n\n[^1]: The note.")
+  assert plain_text(d) == "Title\nSome em and code.\nThe note.\n"
+}
+
+test "word count skips front matter and comments but counts footnotes" {
+  let text = "+++\ntitle = \"one two three\"\n+++\nFour five, six.\n\n<!-- seven eight -->\n\nNine[^n] \u{2014} ten.\n\n[^n]: Eleven twelve."
+  assert word_count(text) == 7
+  assert count_words("don't stop — now") == 3
+  assert count_words("año\u{A0}nuevo") == 2
+  assert word_count("") == 0
+}
+
+# ---- whole documents ----
+
+test "the sample chapter renders" {
+  let text = chapter()
+  let out = render(text)
+  assert contains(out, "<h1 id=\"chapter-one-the-harbour\">Chapter One: The Harbour</h1>")
+  assert contains(out, "<h2 id=\"the-house-on-the-hill\">")
+  assert contains(out, "<li>where the fuse box was, behind a curtain in the kitchen;</li>")
+  assert contains(out, "<ol>\n<li>They knew the tides")
+  assert contains(out, "<blockquote>\n<p><em>I love the lighthouse")
+  assert contains(out, "<section class=\"footnotes\">")
+  assert contains(out, "<li id=\"fn-power\">\n<p>The cable")
+  assert contains(out, "<p>The plaque has since been removed. <a href=\"#fnref-power\"")
+  assert not contains(out, "Open on the ferry")
+  assert not contains(out, "synopsis")
+  let words = word_count(text)
+  assert words > 3300 and words < 3600
+}
+
+test "a long document does not overflow the stack" {
+  let text = chapter()
+  let (_, body) = split_front_matter(text)
+  let big = repeat(body ++ "\n\n", 40)
+  let out = render(big)
+  assert contains(out, "<li id=\"fn-letter\">")
+  assert word_count(big) > 120000
+}
+
+test "long runs of one construct" {
+  let items = repeat("- item\n", 20000)
+  assert contains(h_of(items), "<li>item</li>\n</ul>")
+  let quote = repeat("> line\n", 20000)
+  assert contains(h_of(quote), "line</p>\n</blockquote>")
+  let para = repeat("word *em* `c` ", 50000)
+  assert contains(h_of(para), "<em>em</em>")
+  let opens = repeat("*", 30000)
+  assert h_of(opens) == "<hr />\n"
+  let stars = repeat("a *b ", 20000)
+  assert contains(h_of(stars), "a *b")
+}
+
+fn h_of(s: String) : String = to_html(parse(s))

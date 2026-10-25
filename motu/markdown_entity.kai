@@ -1,0 +1,75 @@
+#[doc("HTML character references as Markdown text decodes them: numeric ones and a set of common names.")]
+
+import motu.markdown_scan
+
+#[doc("Decodes the character reference at byte `i` to the offset after it and its text.")]
+pub(pkg) fn decode_at(s: String, i: Int) : Option[(Int, String)] = {
+  let semi = find_byte(s, 59, i + 1)
+  if semi < 0 or semi - i > 33 { None }
+  else {
+    let body = cut(s, i + 1, semi)
+    let text = if byte_at(body, 0) == 35 { numeric(drop_bytes(body, 1)) } else { named(body) }
+    if text == "" { None } else { Some((semi + 1, text)) }
+  }
+}
+
+fn numeric(d: String) : String = match byte_at(d, 0) {
+  b if b == 120 or b == 88 -> digits_text(drop_bytes(d, 1), 6, 16)
+  _                        -> digits_text(d, 7, 10)
+}
+
+fn digits_text(digits: String, max: Int, radix: Int) : String = {
+  let len = string_length(digits)
+  if len == 0 or len > max { "" }
+  else {
+    match to_int_radix(digits, radix) {
+      Some(cp) -> codepoint_text(cp)
+      None     -> ""
+    }
+  }
+}
+
+fn codepoint_text(cp: Int) : String =
+  if cp == 0 or cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF) { "\u{FFFD}" }
+  else if cp < 0 { "" }
+  else { char_to_string(int_to_char(cp)) }
+
+fn named(name: String) : String = match name {
+  "amp"    -> "&"
+  "lt"     -> "<"
+  "gt"     -> ">"
+  "quot"   -> "\""
+  "apos"   -> "'"
+  "nbsp"   -> "\u{A0}"
+  "copy"   -> "\u{A9}"
+  "reg"    -> "\u{AE}"
+  "trade"  -> "\u{2122}"
+  "mdash"  -> "\u{2014}"
+  "ndash"  -> "\u{2013}"
+  "hellip" -> "\u{2026}"
+  "lsquo"  -> "\u{2018}"
+  "rsquo"  -> "\u{2019}"
+  "ldquo"  -> "\u{201C}"
+  "rdquo"  -> "\u{201D}"
+  "laquo"  -> "\u{AB}"
+  "raquo"  -> "\u{BB}"
+  "iexcl"  -> "\u{A1}"
+  "iquest" -> "\u{BF}"
+  "deg"    -> "\u{B0}"
+  "times"  -> "\u{D7}"
+  "divide" -> "\u{F7}"
+  "middot" -> "\u{B7}"
+  "sect"   -> "\u{A7}"
+  "para"   -> "\u{B6}"
+  "euro"   -> "\u{20AC}"
+  "pound"  -> "\u{A3}"
+  "yen"    -> "\u{A5}"
+  "cent"   -> "\u{A2}"
+  "shy"    -> "\u{AD}"
+  "ensp"   -> "\u{2002}"
+  "emsp"   -> "\u{2003}"
+  "thinsp" -> "\u{2009}"
+  "zwj"    -> "\u{200D}"
+  "zwnj"   -> "\u{200C}"
+  _        -> ""
+}

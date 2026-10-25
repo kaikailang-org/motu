@@ -1,0 +1,361 @@
+#[doc("""
+The block phase of the Markdown parser. It works on whole lines: each
+container (block quote, list item, footnote) gathers its own lines,
+strips its markers and indentation, and parses them again.
+""")]
+
+import motu.markdown
+import motu.markdown_inline
+import motu.markdown_scan
+
+type Parsed = { blocks: [Block], loose: Bool }
+
+type Step = { block: Block, rest: [String] }
+
+type Marker = { ordered: Bool, ch: Int, start: Int, off: Int, empty: Bool }
+
+type Lines = { got: [String], rest: [String] }
+
+#[doc("Parses lines into blocks.")]
+pub(pkg) fn parse_blocks(lines: [String]) : [Block] = parse_lines(lines).blocks
+
+fn parse_lines(lines: [String]) : Parsed = blocks_loop(lines, [], false, false)
+
+fn blocks_loop(lines: [String], acc: [Block], gap: Bool, loose: Bool) : Parsed = match lines {
+  [] -> Parsed { blocks: reverse(acc), loose: loose }
+  [l, ...rest] ->
+    if blank(l) { blocks_loop(rest, acc, gap or not is_empty(acc), loose) }
+    else {
+      let st = one_block(l, rest)
+      blocks_loop(st.rest, [st.block, ...acc], false, loose or gap)
+    }
+}
+
+fn one_block(l: String, rest: [String]) : Step = {
+  let ind = indent_of(l)
+  if ind >= 4 { indented_code([drop_bytes(l, 4)], rest) }
+  else { by_first_byte(l, drop_bytes(l, ind), ind, rest) }
+}
+
+fn by_first_byte(l: String, t: String, ind: Int, rest: [String]) : Step = match byte_at(t, 0) {
+  35          -> atx(t, rest) ?? paragraph(l, rest)
+  62          -> quote(l, rest)
+  60          -> comment_block(t, rest) ?? paragraph(l, rest)
+  91          -> footnote(t, rest) ?? paragraph(l, rest)
+  95          -> thematic(t, rest) ?? paragraph(l, rest)
+  b if b == 96 or b == 126 -> fenced(t, ind, rest) ?? paragraph(l, rest)
+  b if b == 42 or b == 45  -> thematic(t, rest) ?? list_at(l, rest) ?? paragraph(l, rest)
+  b if b == 43 or is_digit_b(b) -> list_at(l, rest) ?? paragraph(l, rest)
+  _           -> paragraph(l, rest)
+}
+
+# ---- leaf blocks ----
+
+fn atx_level(t: String) : Int = {
+  let n = run_of(t, 0, 35)
+  let next = byte_at(t, n)
+  if n >= 1 and n <= 6 and (next < 0 or is_sp(next)) { n } else { 0 }
+}
+
+fn atx(t: String, rest: [String]) : Option[Step] = {
+  let n = atx_level(t)
+  if n == 0 { None }
+  else { Some(Step { block: Heading(n, inline_of(atx_text(trim(drop_bytes(t, n))))), rest: rest }) }
+}
+
+fn atx_text(c: String) : String = {
+  let len = string_length(c)
+  let k = trailing_hashes(c, len, 0)
+  if k == len { "" }
+  else if k > 0 and is_sp(byte_at(c, len - k - 1)) { trim_right(cut(c, 0, len - k)) }
+  else { c }
+}
+
+fn trailing_hashes(c: String, i: Int, k: Int) : Int =
+  if i > 0 and byte_at(c, i - 1) == 35 { trailing_hashes(c, i - 1, k + 1) } else { k }
+
+fn is_thematic(t: String) : Bool = {
+  let c = byte_at(t, 0)
+  (c == 42 or c == 45 or c == 95) and thematic_loop(t, 0, c, 0)
+}
+
+fn thematic_loop(t: String, i: Int, c: Int, k: Int) : Bool = {
+  let b = byte_at(t, i)
+  if b < 0 { k >= 3 }
+  else if b == c { thematic_loop(t, i + 1, c, k + 1) }
+  else if is_sp(b) { thematic_loop(t, i + 1, c, k) }
+  else { false }
+}
+
+fn thematic(t: String, rest: [String]) : Option[Step] =
+  if is_thematic(t) { Some(Step { block: ThematicBreak, rest: rest }) } else { None }
+
+fn setext_level(line: String) : Int = {
+  let ind = indent_of(line)
+  let t = trim_right(drop_bytes(line, ind))
+  let c = byte_at(t, 0)
+  if ind >= 4 or (c != 61 and c != 45) or run_of(t, 0, c) != string_length(t) { 0 }
+  else if c == 61 { 1 } else { 2 }
+}
+
+fn paragraph(l: String, rest: [String]) : Step = para_loop(rest, [trim_left(l)])
+
+fn para_loop(rest: [String], acc: [String]) : Step = match rest {
+  [x, ...more] if not blank(x) and setext_level(x) > 0 ->
+    Step { block: Heading(setext_level(x), inline_of(para_text(acc))), rest: more }
+  [x, ...more] if not blank(x) and not interrupts(x) -> para_loop(more, [trim_left(x), ...acc])
+  _ -> Step { block: Paragraph(inline_of(para_text(acc))), rest: rest }
+}
+
+fn para_text(acc: [String]) : String = trim_right(string_join(reverse(acc), "\n"))
+
+fn inline_of(s: String) : [Inline] = markdown_inline.parse_inline(s)
+
+#[doc("True when a line opens a block that ends a running paragraph.")]
+pub(pkg) fn interrupts(x: String) : Bool = {
+  let ind = indent_of(x)
+  ind < 4 and opens_block(drop_bytes(x, ind))
+}
+
+fn opens_block(t: String) : Bool = match byte_at(t, 0) {
+  35 -> atx_level(t) > 0
+  62 -> true
+  60 -> starts_with(t, "<!--")
+  91 -> footnote_label(t) != ""
+  95 -> is_thematic(t)
+  b if b == 96 or b == 126 -> fence_len(t) > 0
+  b if b == 42 or b == 45 or b == 43 -> is_thematic(t) or starts_item(t)
+  b if is_digit_b(b) -> starts_item(t)
+  _ -> false
+}
+
+fn starts_item(t: String) : Bool = match marker(t) {
+  Some(m) -> not m.empty and (not m.ordered or m.start == 1)
+  None    -> false
+}
+
+# ---- code ----
+
+fn fence_len(t: String) : Int = {
+  let c = byte_at(t, 0)
+  let n = run_of(t, 0, c)
+  if n < 3 { 0 }
+  else if c == 96 and find_byte(t, 96, n) >= 0 { 0 }
+  else { n }
+}
+
+fn fenced(t: String, ind: Int, rest: [String]) : Option[Step] = {
+  let n = fence_len(t)
+  if n == 0 { None }
+  else {
+    let c = byte_at(t, 0)
+    let info = trim(drop_bytes(t, n))
+    let body = fence_body(rest, c, n, ind, [])
+    Some(Step { block: CodeBlock(info, code_text(body.got)), rest: body.rest })
+  }
+}
+
+fn fence_body(rest: [String], c: Int, n: Int, ind: Int, acc: [String]) : Lines = match rest {
+  [] -> Lines { got: acc, rest: [] }
+  [x, ...more] ->
+    if closes_fence(x, c, n) { Lines { got: acc, rest: more } }
+    else { fence_body(more, c, n, ind, [drop_bytes(x, min(ind, indent_of(x))), ...acc]) }
+}
+
+fn closes_fence(x: String, c: Int, n: Int) : Bool = {
+  let ind = indent_of(x)
+  let k = run_of(x, ind, c)
+  ind < 4 and k >= n and blank_from(x, ind + k)
+}
+
+fn code_text(rev_lines: [String]) : String = match rev_lines {
+  [] -> ""
+  _  -> string_join(reverse(["", ...rev_lines]), "\n")
+}
+
+fn indented_code(acc: [String], rest: [String]) : Step = match rest {
+  [x, ...more] if blank(x) or indent_of(x) >= 4 ->
+    indented_code([drop_bytes(x, min(4, indent_of(x))), ...acc], more)
+  _ -> {
+    let kept = blank_head(acc, 0)
+    Step { block: CodeBlock("", code_text(kept.snd)), rest: repeat_blank(kept.fst, rest) }
+  }
+}
+
+fn blank_head(xs: [String], k: Int) : (Int, [String]) = match xs {
+  [x, ...t] if blank(x) -> blank_head(t, k + 1)
+  _ -> (k, xs)
+}
+
+fn repeat_blank(k: Int, rest: [String]) : [String] =
+  if k <= 0 { rest } else { repeat_blank(k - 1, ["", ...rest]) }
+
+# ---- comments ----
+
+fn comment_block(t: String, rest: [String]) : Option[Step] =
+  if not starts_with(t, "<!--") { None }
+  else { Some(comment_lines(drop_bytes(t, 4), rest, [])) }
+
+fn comment_lines(line: String, rest: [String], acc: [String]) : Step = {
+  let e = find_from(line, "-->", 0)
+  if e >= 0 {
+    let after = drop_bytes(line, e + 3)
+    let text = string_join(reverse([cut(line, 0, e), ...acc]), "\n")
+    Step { block: Comment(trim(text)), rest: if blank(after) { rest } else { [after, ...rest] } }
+  } else {
+    match rest {
+      []           -> Step { block: Comment(trim(string_join(reverse([line, ...acc]), "\n"))), rest: [] }
+      [x, ...more] -> comment_lines(x, more, [line, ...acc])
+    }
+  }
+}
+
+# ---- containers ----
+
+fn quote(l: String, rest: [String]) : Step = {
+  let got = quote_lines([l, ...rest], [], false)
+  Step { block: Quote(parse_lines(reverse(got.got)).blocks), rest: got.rest }
+}
+
+fn strip_quote(x: String) : Option[String] = {
+  let ind = indent_of(x)
+  if ind >= 4 or byte_at(x, ind) != 62 { None }
+  else if byte_at(x, ind + 1) == 32 { Some(drop_bytes(x, ind + 2)) }
+  else { Some(drop_bytes(x, ind + 1)) }
+}
+
+fn quote_lines(rest: [String], acc: [String], can_lazy: Bool) : Lines = match rest {
+  [] -> Lines { got: acc, rest: [] }
+  [x, ...more] -> match strip_quote(x) {
+    Some(s) -> quote_lines(more, [s, ...acc], not blank(s))
+    None ->
+      if can_lazy and not blank(x) and not interrupts(x) { quote_lines(more, [x, ...acc], true) }
+      else { Lines { got: acc, rest: rest } }
+  }
+}
+
+fn footnote_label(t: String) : String = {
+  if byte_at(t, 0) != 91 or byte_at(t, 1) != 94 { "" }
+  else {
+    let close = find_byte(t, 93, 2)
+    if close <= 2 or byte_at(t, close + 1) != 58 { "" }
+    else {
+      let label = cut(t, 2, close)
+      if label_ok(label, 0) { label } else { "" }
+    }
+  }
+}
+
+fn label_ok(s: String, i: Int) : Bool = {
+  let b = byte_at(s, i)
+  if b < 0 { true } else if is_sp(b) or b == 91 { false } else { label_ok(s, i + 1) }
+}
+
+fn footnote(t: String, rest: [String]) : Option[Step] = {
+  let label = footnote_label(t)
+  if label == "" { None }
+  else {
+    let first = trim_left(drop_bytes(t, string_length(label) + 4))
+    let got = indented_lines(rest, 4, [first], blank(first))
+    Some(Step { block: FootnoteDef(label, parse_lines(reverse(got.got)).blocks), rest: got.rest })
+  }
+}
+
+# Lines of a container whose content sits at column `w`: indented lines,
+# blank lines followed by an indented one, and lazy paragraph lines.
+fn indented_lines(rest: [String], w: Int, acc: [String], last_blank: Bool) : Lines = match rest {
+  [] -> Lines { got: acc, rest: [] }
+  [x, ...more] ->
+    if blank(x) {
+      if continues(more, w) { indented_lines(more, w, ["", ...acc], true) }
+      else { Lines { got: acc, rest: rest } }
+    }
+    else if indent_of(x) >= w { indented_lines(more, w, [drop_bytes(x, w), ...acc], false) }
+    else if not last_blank and lazy_ok(x) { indented_lines(more, w, [x, ...acc], false) }
+    else { Lines { got: acc, rest: rest } }
+}
+
+fn continues(rest: [String], w: Int) : Bool = match rest {
+  [] -> false
+  [x, ...more] -> if blank(x) { continues(more, w) } else { indent_of(x) >= w }
+}
+
+fn lazy_ok(x: String) : Bool = {
+  let ind = indent_of(x)
+  not interrupts(x) and (ind >= 4 or is_none(marker(drop_bytes(x, ind))))
+}
+
+# ---- lists ----
+
+fn marker(t: String) : Option[Marker] = {
+  let b = byte_at(t, 0)
+  if b == 42 or b == 43 or b == 45 { marker_end(t, 1, false, b, 0) }
+  else {
+    let d = run_digits(t, 0)
+    let delim = byte_at(t, d)
+    if d >= 1 and d <= 9 and (delim == 46 or delim == 41) {
+      marker_end(t, d + 1, true, delim, string_to_int(cut(t, 0, d)) ?? 0)
+    } else { None }
+  }
+}
+
+fn run_digits(t: String, i: Int) : Int = if is_digit_b(byte_at(t, i)) { run_digits(t, i + 1) } else { i }
+
+fn marker_end(t: String, m: Int, ordered: Bool, ch: Int, start: Int) : Option[Marker] = {
+  let next = byte_at(t, m)
+  if next >= 0 and not is_sp(next) { None }
+  else {
+    let sp = skip_sp(t, m) - m
+    let empty = blank_from(t, m)
+    let off = if empty or sp >= 5 { m + 1 } else { m + sp }
+    Some(Marker { ordered: ordered, ch: ch, start: start, off: off, empty: empty })
+  }
+}
+
+fn list_at(l: String, rest: [String]) : Option[Step] = {
+  let ind = indent_of(l)
+  match marker(drop_bytes(l, ind)) {
+    None    -> None
+    Some(m) -> Some(items_loop(l, rest, m, [], false))
+  }
+}
+
+fn items_loop(l: String, rest: [String], m0: Marker, items: [[Block]], loose: Bool) : Step = {
+  let ind = indent_of(l)
+  let m = marker(drop_bytes(l, ind)) ?? m0
+  let w = ind + m.off
+  let first = if m.empty { "" } else { drop_bytes(l, w) }
+  let got = if m.empty and starts_blank(rest) { Lines { got: [""], rest: rest } }
+            else { indented_lines(rest, w, [first], m.empty) }
+  let item = parse_lines(reverse(got.got))
+  let (skipped, after) = blank_head(got.rest, 0)
+  let gap = skipped > 0
+  let items2 = [item.blocks, ...items]
+  let loose2 = loose or item.loose
+  match after {
+    [x, ...more] if sibling(x, m0) -> items_loop(x, more, m0, items2, loose2 or gap)
+    _ -> Step { block: list_block(m0, not loose2, reverse(items2)), rest: got.rest }
+  }
+}
+
+fn starts_blank(rest: [String]) : Bool = match rest {
+  [x, ..._] -> blank(x)
+  []        -> false
+}
+
+fn sibling(x: String, m0: Marker) : Bool = {
+  let ind = indent_of(x)
+  let t = drop_bytes(x, ind)
+  ind < 4 and not is_thematic(t) and match marker(t) {
+    Some(m) -> m.ordered == m0.ordered and m.ch == m0.ch
+    None    -> false
+  }
+}
+
+fn is_none(m: Option[Marker]) : Bool = match m {
+  Some(_) -> false
+  None    -> true
+}
+
+fn list_block(m: Marker, tight: Bool, items: [[Block]]) : Block =
+  if m.ordered { OrderedList(m.start, tight, items) } else { BulletList(tight, items) }

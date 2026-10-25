@@ -1,0 +1,73 @@
+#[doc("Plain text of a Markdown document, for search and word counts.")]
+
+import motu.markdown
+import motu.markdown_scan
+
+#[doc("The text of a document without markup; comments are dropped and footnote text kept.")]
+pub fn plain_text(doc: Doc) : String = string_concat_all(reverse(blocks_text(doc.blocks, [])))
+
+#[doc("The text of a run of inlines without markup.")]
+pub fn inlines_text(xs: [Inline]) : String = string_concat_all(reverse(inlines_acc(xs, [])))
+
+#[doc("Counts the words of a document's body; front matter and comments are not counted, footnotes are.")]
+pub fn word_count(text: String) : Int = {
+  let (_, body) = split_front_matter(text)
+  count_words(plain_text(parse(body)))
+}
+
+#[doc("Counts runs of non-space text that hold at least one letter or digit.")]
+pub fn count_words(s: String) : Int = words_loop(s, string_length(s), 0, false, 0)
+
+fn words_loop(s: String, n: Int, i: Int, word: Bool, count: Int) : Int =
+  if i >= n { ended(word, count) }
+  else {
+    let b = string_byte_at_int(s, i)
+    let k = if b < 128 { ascii_kind(b) } else { cp_class(string_cp_at(s, i)) }
+    let next = if b < 128 { i + 1 } else { i + string_cp_len(s, i) }
+    if k == 0 { words_loop(s, n, next, false, ended(word, count)) }
+    else { words_loop(s, n, next, word or k == 2, count) }
+  }
+
+fn ended(word: Bool, count: Int) : Int = if word { count + 1 } else { count }
+
+# 0 separates words, 2 makes a run a word, 1 neither.
+fn ascii_kind(b: Int) : Int = if b <= 32 { 0 } else if is_alnum_b(b) { 2 } else { 1 }
+
+fn blocks_text(bs: [Block], acc: [String]) : [String] = match bs {
+  []        -> acc
+  [b, ...t] -> blocks_text(t, block_text(b, acc))
+}
+
+fn block_text(b: Block, acc: [String]) : [String] = match b {
+  Heading(_, xs)          -> ["\n", ...inlines_acc(xs, acc)]
+  Paragraph(xs)           -> ["\n", ...inlines_acc(xs, acc)]
+  Quote(bs)               -> blocks_text(bs, acc)
+  BulletList(_, items)    -> items_text(items, acc)
+  OrderedList(_, _, items) -> items_text(items, acc)
+  CodeBlock(_, text)      -> [text, ...acc]
+  FootnoteDef(_, bs)      -> blocks_text(bs, acc)
+  ThematicBreak           -> acc
+  Comment(_)              -> acc
+}
+
+fn items_text(items: [[Block]], acc: [String]) : [String] = match items {
+  []        -> acc
+  [i, ...t] -> items_text(t, blocks_text(i, acc))
+}
+
+fn inlines_acc(xs: [Inline], acc: [String]) : [String] = match xs {
+  []        -> acc
+  [x, ...t] -> inlines_acc(t, inline_text(x, acc))
+}
+
+fn inline_text(x: Inline, acc: [String]) : [String] = match x {
+  Text(s)           -> [s, ...acc]
+  Code(s)           -> [s, ...acc]
+  Emph(xs)          -> inlines_acc(xs, acc)
+  Strong(xs)        -> inlines_acc(xs, acc)
+  Link(xs, _, _)    -> inlines_acc(xs, acc)
+  Image(xs, _, _)   -> inlines_acc(xs, acc)
+  FootnoteRef(_)    -> acc
+  SoftBreak         -> [" ", ...acc]
+  HardBreak         -> ["\n", ...acc]
+}

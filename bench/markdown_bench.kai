@@ -1,0 +1,21 @@
+import fs.file
+import time
+import motu.markdown
+import motu.markdown_html
+import motu.markdown_text
+
+fn ms(a: Instant, b: Instant) : Int = (instant_to_nanos(b) - instant_to_nanos(a)) / 1_000_000
+
+fn main() : Unit / Stdout + File + Clock = {
+  let (_, body) = split_front_matter(file.read("tests/data/harbour.md"))
+  let text = repeat(body ++ "\n\n", 44)
+  let t0 = monotonic()
+  let doc = parse(text)
+  let t1 = monotonic()
+  let html = to_html(doc)
+  let t2 = monotonic()
+  let words = count_words(plain_text(doc))
+  let t3 = monotonic()
+  println("words=#{words} bytes=#{string_length(text)} html=#{string_length(html)}")
+  println("parse=#{ms(t0, t1)}ms html=#{ms(t1, t2)}ms count=#{ms(t2, t3)}ms total=#{ms(t0, t2)}ms")
+}

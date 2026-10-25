@@ -1,0 +1,261 @@
+#[doc("""
+Markdown documents as HTML5 fragments. Text and attributes are escaped,
+comments are dropped, headings carry ids from a slug of their text, and
+footnotes are numbered in order of first reference and gathered into a
+closing `<section class="footnotes">` with links back to each reference.
+Void elements are written `<br />` so the output is also valid XHTML.
+""")]
+
+import collections.map
+import motu.markdown
+import motu.markdown_scan
+import motu.markdown_text
+
+type Notes = {
+  defs: Map[String, [Block]],
+  num: Map[String, Int],
+  refs: Map[String, Int],
+  order: Map[Int, String],
+  count: Int,
+}
+
+type St = { out: [String], slugs: Map[String, Int], notes: Notes }
+
+#[doc("Renders a document as an HTML fragment.")]
+pub fn to_html(doc: Doc) : String = {
+  let notes = Notes { defs: collect_defs(doc.blocks, map.empty()), num: map.empty(), refs: map.empty(),
+                      order: map.empty(), count: 0 }
+  let st = blocks(doc.blocks, false, St { out: [], slugs: map.empty(), notes: notes })
+  string_concat_all(reverse(footnotes(st).out))
+}
+
+#[doc("Renders Markdown text as HTML, leaving out its front matter.")]
+pub fn render(text: String) : String = {
+  let (_, body) = split_front_matter(text)
+  to_html(parse(body))
+}
+
+#[doc("Escapes `&`, `<`, `>` and `\"` for HTML text and attribute values.")]
+pub fn escape(s: String) : String =
+  if needs_escape(s, 0) { string_concat_all(reverse(escape_loop(s, 0, 0, []))) } else { s }
+
+fn needs_escape(s: String, i: Int) : Bool = {
+  let b = byte_at(s, i)
+  if b < 0 { false } else if special_b(b) { true } else { needs_escape(s, i + 1) }
+}
+
+fn special_b(b: Int) : Bool = b == 38 or b == 60 or b == 62 or b == 34
+
+fn escaped(b: Int) : String = match b {
+  38 -> "&amp;"
+  60 -> "&lt;"
+  62 -> "&gt;"
+  34 -> "&quot;"
+  _  -> ""
+}
+
+fn escape_loop(s: String, i: Int, start: Int, acc: [String]) : [String] = {
+  let b = byte_at(s, i)
+  if b < 0 { [cut(s, start, i), ...acc] }
+  else if special_b(b) { escape_loop(s, i + 1, i + 1, [escaped(b), cut(s, start, i), ...acc]) }
+  else { escape_loop(s, i + 1, start, acc) }
+}
+
+fn put(st: St, s: String) : St = St { out: [s, ...st.out], slugs: st.slugs, notes: st.notes }
+
+fn put2(st: St, a: String, b: String) : St = St { out: [b, a, ...st.out], slugs: st.slugs, notes: st.notes }
+
+# ---- blocks ----
+
+fn blocks(bs: [Block], tight: Bool, st: St) : St = match bs {
+  []                       -> st
+  [Paragraph(xs)] if tight -> inlines(xs, st)
+  [Paragraph(xs), ...t] if tight -> blocks(t, tight, put(inlines(xs, st), "\n"))
+  [b, ...t]                -> blocks(t, tight, block(b, st))
+}
+
+fn block(b: Block, st: St) : St = match b {
+  Heading(n, xs)              -> heading(n, xs, st)
+  Paragraph(xs)               -> put(inlines(xs, put(st, "<p>")), "</p>\n")
+  Quote(bs)                   -> put(blocks(bs, false, put(st, "<blockquote>\n")), "</blockquote>\n")
+  BulletList(tight, items)    -> put(items_html(items, tight, put(st, "<ul>\n")), "</ul>\n")
+  OrderedList(n, tight, items) -> put(items_html(items, tight, put(st, ol_open(n))), "</ol>\n")
+  CodeBlock(info, text)       -> put(put(put(st, code_open(info)), escape(text)), "</code></pre>\n")
+  ThematicBreak               -> put(st, "<hr />\n")
+  Comment(_)                  -> st
+  FootnoteDef(_, _)           -> st
+}
+
+fn ol_open(n: Int) : String = if n == 1 { "<ol>\n" } else { "<ol start=\"#{n}\">\n" }
+
+fn code_open(info: String) : String = {
+  let lang = match split(trim(info), " ") {
+    [w, ..._] -> w
+    []        -> ""
+  }
+  if lang == "" { "<pre><code>" } else { "<pre><code class=\"language-#{escape(lang)}\">" }
+}
+
+fn items_html(items: [[Block]], tight: Bool, st: St) : St = match items {
+  []        -> st
+  [i, ...t] -> items_html(t, tight, put(blocks(i, tight, put(st, li_open(i, tight))), "</li>\n"))
+}
+
+fn li_open(item: [Block], tight: Bool) : String = match item {
+  [Paragraph(_), ..._] if tight -> "<li>"
+  []                            -> "<li>"
+  _                             -> "<li>\n"
+}
+
+fn heading(n: Int, xs: [Inline], st: St) : St = {
+  let base = slug(inlines_text(xs))
+  let id = unique_slug(base, st.slugs, 0)
+  let st2 = St { out: st.out, slugs: map.put(st.slugs, id, 1), notes: st.notes }
+  put(inlines(xs, put(st2, "<h#{n} id=\"#{escape(id)}\">")), "</h#{n}>\n")
+}
+
+fn unique_slug(base: String, used: Map[String, Int], k: Int) : String = {
+  let cand = if k == 0 { base } else { "#{base}-#{k}" }
+  if map.contains(used, cand) { unique_slug(base, used, k + 1) } else { cand }
+}
+
+#[doc("A heading's anchor: lower-case letters, digits, `-` and `_`, with spaces as hyphens.")]
+pub fn slug(text: String) : String = {
+  let s = string_concat_all(reverse(slug_loop(lower(trim(text)), 0, [])))
+  if s == "" { "section" } else { s }
+}
+
+fn slug_loop(t: String, i: Int, acc: [String]) : [String] = {
+  let b = byte_at(t, i)
+  if b < 0 { acc }
+  else if is_alnum_b(b) or b == 45 or b == 95 or b >= 128 { slug_loop(t, i + 1, [cut(t, i, i + 1), ...acc]) }
+  else if is_sp(b) or b == 10 { slug_loop(t, i + 1, ["-", ...acc]) }
+  else { slug_loop(t, i + 1, acc) }
+}
+
+# ---- inlines ----
+
+fn inlines(xs: [Inline], st: St) : St = match xs {
+  []        -> st
+  [x, ...t] -> inlines(t, inline(x, st))
+}
+
+fn inline(x: Inline, st: St) : St = match x {
+  Text(s)                -> put(st, escape(s))
+  Emph(xs)               -> put(inlines(xs, put(st, "<em>")), "</em>")
+  Strong(xs)             -> put(inlines(xs, put(st, "<strong>")), "</strong>")
+  Code(s)                -> put2(st, "<code>", escape(s)) |> put(_, "</code>")
+  Link(xs, url, title)   -> put(inlines(xs, put(st, link_open(url, title))), "</a>")
+  Image(xs, url, title)  -> put(st, image(xs, url, title))
+  FootnoteRef(label)     -> note_ref(label, st)
+  SoftBreak              -> put(st, "\n")
+  HardBreak              -> put(st, "<br />\n")
+}
+
+fn title_attr(title: String) : String = if title == "" { "" } else { " title=\"#{escape(title)}\"" }
+
+fn link_open(url: String, title: String) : String = "<a href=\"#{url_attr(url)}\"#{title_attr(title)}>"
+
+fn image(alt: [Inline], url: String, title: String) : String =
+  "<img src=\"#{url_attr(url)}\" alt=\"#{escape(inlines_text(alt))}\"#{title_attr(title)} />"
+
+#[doc("A URL made safe for an attribute: script schemes become `#`, spaces are percent-encoded.")]
+pub fn url_attr(url: String) : String =
+  if unsafe_scheme(lower(trim(url))) { "#" } else { escape(replace(url, " ", "%20")) }
+
+fn unsafe_scheme(u: String) : Bool =
+  starts_with(u, "javascript:") or starts_with(u, "vbscript:") or starts_with(u, "file:")
+    or (starts_with(u, "data:") and not data_image(u))
+
+fn data_image(u: String) : Bool =
+  starts_with(u, "data:image/png") or starts_with(u, "data:image/gif") or starts_with(u, "data:image/jpeg")
+    or starts_with(u, "data:image/webp")
+
+# ---- footnotes ----
+
+fn collect_defs(bs: [Block], acc: Map[String, [Block]]) : Map[String, [Block]] = match bs {
+  [] -> acc
+  [FootnoteDef(label, body), ...t] ->
+    collect_defs(t, if map.contains(acc, note_key(label)) { acc } else { map.put(acc, note_key(label), body) })
+  [Quote(inner), ...t]             -> collect_defs(t, collect_defs(inner, acc))
+  [BulletList(_, items), ...t]     -> collect_defs(t, collect_items(items, acc))
+  [OrderedList(_, _, items), ...t] -> collect_defs(t, collect_items(items, acc))
+  [_, ...t]                        -> collect_defs(t, acc)
+}
+
+fn collect_items(items: [[Block]], acc: Map[String, [Block]]) : Map[String, [Block]] = match items {
+  []        -> acc
+  [i, ...t] -> collect_items(t, collect_defs(i, acc))
+}
+
+fn note_key(label: String) : String = lower(label)
+
+fn note_id(key: String) : String = string_concat_all(reverse(id_loop(key, 0, [])))
+
+fn id_loop(t: String, i: Int, acc: [String]) : [String] = {
+  let b = byte_at(t, i)
+  if b < 0 { acc }
+  else if is_alnum_b(b) or b == 45 or b == 95 { id_loop(t, i + 1, [cut(t, i, i + 1), ...acc]) }
+  else { id_loop(t, i + 1, ["-", ...acc]) }
+}
+
+fn ref_id(id: String, k: Int) : String = if k == 1 { "fnref-#{id}" } else { "fnref-#{id}-#{k}" }
+
+fn note_ref(label: String, st: St) : St = {
+  let key = note_key(label)
+  if not map.contains(st.notes.defs, key) { put(st, escape("[^#{label}]")) }
+  else {
+    let ns = cite(st.notes, key)
+    let id = note_id(key)
+    let n = map.get(ns.num, key) ?? 0
+    let k = map.get(ns.refs, key) ?? 1
+    let html = "<sup class=\"footnote-ref\"><a href=\"#fn-#{id}\" id=\"#{ref_id(id, k)}\">#{n}</a></sup>"
+    St { out: [html, ...st.out], slugs: st.slugs, notes: ns }
+  }
+}
+
+# Records one more reference to `key`, numbering the note on its first.
+fn cite(ns: Notes, key: String) : Notes = {
+  let refs = map.put(ns.refs, key, (map.get(ns.refs, key) ?? 0) + 1)
+  if map.contains(ns.num, key) {
+    Notes { defs: ns.defs, num: ns.num, refs: refs, order: ns.order, count: ns.count }
+  } else {
+    let n = ns.count + 1
+    Notes { defs: ns.defs, num: map.put(ns.num, key, n), refs: refs, order: map.put(ns.order, n, key), count: n }
+  }
+}
+
+fn footnotes(st: St) : St =
+  if st.notes.count == 0 { st }
+  else { put(notes_loop(1, put(st, "<section class=\"footnotes\">\n<ol>\n")), "</ol>\n</section>\n") }
+
+# Rendering a note may reference notes not yet numbered, so the count can grow while looping.
+fn notes_loop(k: Int, st: St) : St =
+  if k > st.notes.count { st }
+  else {
+    let key = map.get(st.notes.order, k) ?? ""
+    let body = map.get(st.notes.defs, key) ?? []
+    notes_loop(k + 1, note_item(key, body, st))
+  }
+
+fn note_item(key: String, body: [Block], st: St) : St = {
+  let id = note_id(key)
+  let back = backrefs(id, 1, map.get(st.notes.refs, key) ?? 1, [])
+  let opened = put(st, "<li id=\"fn-#{id}\">\n")
+  put(note_body(body, back, opened), "</li>\n")
+}
+
+fn note_body(body: [Block], back: String, st: St) : St = match body {
+  []                   -> put(st, "<p>#{back}</p>\n")
+  [Paragraph(xs)]      -> put(inlines(xs, put(st, "<p>")), " #{back}</p>\n")
+  [b]                  -> put(block(b, st), "<p>#{back}</p>\n")
+  [b, ...t]            -> note_body(t, back, block(b, st))
+}
+
+fn backrefs(id: String, k: Int, total: Int, acc: [String]) : String =
+  if k > total { string_join(reverse(acc), " ") }
+  else {
+    let mark = if k == 1 { "\u{21A9}" } else { "\u{21A9}<sup>#{k}</sup>" }
+    let a = "<a href=\"##{ref_id(id, k)}\" class=\"footnote-backref\">#{mark}</a>"
+    backrefs(id, k + 1, total, [a, ...acc])
+  }
