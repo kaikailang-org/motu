@@ -71,8 +71,11 @@ fn first_of(xs: [String]) : Option[String] = match xs {
 
 fn flag(on: Bool, bit: Int) : Int = if on { bit } else { 0 }
 
+#[doc("Sends one JSON value to the page of window `win`.")]
+pub fn post(win: Int, v: JsonValue) : Unit / Ffi = shim.motu_post(win, json_encode(v))
+
 fn post_event(win: Int, name: String, data: JsonValue) : Unit / Ffi =
-  shim.motu_post(win, json_encode(JObj([("t", JStr("event")), ("name", JStr(name)), ("data", data)])))
+  post(win, JObj([("t", JStr("event")), ("name", JStr(name)), ("data", data)]))
 
 fn new_window(title: String, width: Int, height: Int, page: String) : Int / Ffi = {
   let win = shim.motu_window_new(title, width, height)

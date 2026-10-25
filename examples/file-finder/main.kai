@@ -1,0 +1,88 @@
+import ffi
+import os.env
+import fs.dir
+import fs.file
+import encoding.json
+import encoding.json_bind
+import motu.app
+import motu.desktop
+import motu.menu
+import motu.shim
+
+fn hit(c: Call, path: String, line: String) : Unit / Desktop =
+  Desktop.emit(c.win, "hit", JObj([("call", JNum(c.id)), ("path", JStr(path)), ("line", JStr(line))]))
+
+fn first_match(text: String, query: String) : Option[String] =
+  string.lines(text) |> list.find(l => string.contains(string.to_lower(l), query))
+
+fn search_one(c: Call, query: String, path: String) : Int / Desktop + File =
+  if string.contains(string.to_lower(path), query) {
+    hit(c, path, "")
+    1
+  } else {
+    match file.metadata(path) {
+      Ok(m) if m.is_file and m.size < 1000000 -> match read_file(path) {
+        Ok(text) -> match first_match(text, query) {
+          Some(line) -> { hit(c, path, string.trim(line)); 1 }
+          None       -> 0
+        }
+        Err(_) -> 0
+      }
+      _ -> 0
+    }
+  }
+
+fn search(c: Call) : Result[JsonValue, String] / Desktop + File = {
+  let root = app.arg_string(c, "root") ?? ""
+  let query = string.to_lower(app.arg_string(c, "query") ?? "")
+  if root == "" or string.length(query) < 2 {
+    Ok(JNum(0))
+  } else {
+    let found = dir.walk(root) |> list.foldl(0, (n, p) => n + search_one(c, query, p))
+    Ok(JNum(found))
+  }
+}
+
+fn command(c: Call) : Result[JsonValue, String] / Desktop + Dialog + Shell + File = match c.cmd {
+  "pick"   -> Ok(match Dialog.open_folder(c.win, "Choose a folder to search") {
+    Some(p) -> JStr(p)
+    None    -> JNull
+  })
+  "search" -> search(c)
+  "open"   -> { Shell.open_path(app.arg_string(c, "path") ?? ""); Ok(JNull) }
+  "reveal" -> { Shell.reveal_path(app.arg_string(c, "path") ?? ""); Ok(JNull) }
+  other    -> Err("unknown command #{other}")
+}
+
+fn main() : Int / Spawn + Ffi + File + Stdout + Env = {
+  let cfg = Config {
+    name: "File Finder", assets: "examples/file-finder/assets", page: env.get("MOTU_PAGE") ?? "index.html",
+    title: "File Finder", width: 820, height: 560, menus: [menu.edit_menu()],
+  }
+  app.run(cfg, c => command(c), ev => app.default_event(ev))
+}
+
+extern "C" fn motu_on_message(ud: Userdata, win: Int, json: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, PageMessage(win, json))
+}
+
+extern "C" fn motu_on_window_event(ud: Userdata, win: Int, kind: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, WindowEvent(win, kind))
+}
+
+extern "C" fn motu_on_menu(ud: Userdata, id: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, MenuChosen(id))
+}
+
+extern "C" fn motu_on_drop(ud: Userdata, win: Int, paths: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, Dropped(win, paths))
+}
+
+extern "C" fn motu_on_reply(ud: Userdata, json: String) : Unit = {
+  let pid: Pid[String] = take_userdata(ud)
+  mailbox_send(pid, json)
+}

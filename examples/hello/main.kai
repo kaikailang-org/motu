@@ -12,7 +12,6 @@ fn command(c: Call) : Result[JsonValue, String] / Desktop + Stdout + Clock = mat
   "greet"  -> Ok(JStr("Hello, #{app.arg_string(c, "name") ?? "you"}, from kaikai"))
   "ping"   -> Ok(JNull)
   "slow"   -> { time.sleep(time.seconds(5)); Ok(JStr("finished")) }
-  "report" -> { println(json.as_string(c.args) ?? ""); Desktop.quit(); Ok(JNull) }
   other    -> Err("unknown command #{other}")
 }
 

@@ -68,14 +68,27 @@ fn text_of(v: JsonValue) : String = json.as_string(v) ?? ""
 
 fn int_of(v: JsonValue) : Int = json.as_int(v) ?? 0
 
-fn reply_json(id: Int, r: Result[JsonValue, String]) : String = match r {
-  Ok(v)  -> json_encode(JObj([("t", JStr("reply")), ("id", JNum(id)), ("ok", v)]))
-  Err(e) -> json_encode(JObj([("t", JStr("reply")), ("id", JNum(id)), ("err", JStr(e))]))
+fn reply(win: Int, id: Int, r: Result[JsonValue, String]) : Unit / Ffi = match r {
+  Ok(v)  -> desktop.post(win, JObj([("t", JStr("reply")), ("id", JNum(id)), ("ok", v)]))
+  Err(e) -> desktop.post(win, JObj([("t", JStr("reply")), ("id", JNum(id)), ("err", JStr(e))]))
 }
 
-fn serve[e](commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e, c: Call, home: Pid[Incoming]) : Unit / Spawn + Ffi + e = {
-  let r = desktop.with_desktop(() => commands(c))
-  shim.motu_post(c.win, reply_json(c.id, r))
+# `motu.report` prints its argument and quits: how an example's page reports a self-test.
+fn builtin(c: Call) : Option[Result[JsonValue, String]] / Stdout + Ffi = match c.cmd {
+  "motu.report" -> {
+    println(json.as_string(c.args) ?? json_encode(c.args))
+    shim.motu_quit()
+    Some(Ok(JNull))
+  }
+  _ -> None
+}
+
+fn serve[e](commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e, c: Call, home: Pid[Incoming]) : Unit / Spawn + Ffi + Stdout + e = {
+  let r = match builtin(c) {
+    Some(answer) -> answer
+    None         -> desktop.with_desktop(() => commands(c))
+  }
+  reply(c.win, c.id, r)
   mailbox_send(home, Finished(c.win, c.id))
 }
 
@@ -95,7 +108,7 @@ fn event_of(win: Int, kind: String) : Option[Event] = match kind {
 
 fn cancel_one(r: Running) : Unit / Spawn + Ffi = {
   Spawn.cancel(r.fiber)
-  shim.motu_post(r.win, reply_json(r.id, Err("cancelled")))
+  reply(r.win, r.id, Err("cancelled"))
 }
 
 fn call_of(win: Int, m: JsonValue) : Call =
@@ -110,7 +123,7 @@ fn on_window_event[e](h: Handlers[e], win: Int, kind: String) : Unit / Spawn + F
     None     -> ()
   }
 
-fn dispatch[e](h: Handlers[e], running: [Running]) : Unit / Actor[Incoming] + Spawn + Ffi + e =
+fn dispatch[e](h: Handlers[e], running: [Running]) : Unit / Actor[Incoming] + Spawn + Ffi + Stdout + e =
   match Actor.receive() {
     PageMessage(win, text) -> {
       let m = json_decode(text) ?? JNull
@@ -150,7 +163,7 @@ pub fn run[e](
   cfg: Config,
   commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e,
   events: (Event) -> Unit / Desktop + Dialog + Shell + Clipboard + e,
-) : Int / Spawn + Ffi + e = {
+) : Int / Spawn + Ffi + Stdout + e = {
   let h = Handlers { commands: commands, events: events }
   let pid = spawn_actor(() => dispatch(h, []))
   let ud = retain_userdata(pid)

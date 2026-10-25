@@ -1,0 +1,43 @@
+import fs.dir
+import fs.file
+import motu.project
+
+fn scratch() : String / File = {
+  let d = "#{dir.temp_dir()}/motu-project-test"
+  dir.create_dir(d) |> ignore
+  d
+}
+
+test "paths resolve under the root" {
+  assert project.resolve("/p", "docs/a.md") == Ok("/p/docs/a.md")
+  assert project.resolve("/p", "./docs//a.md") == Ok("/p/docs/a.md")
+  assert project.resolve("/p", "") == Ok("/p")
+}
+
+test "absolute paths and climbing out are refused" {
+  assert project.resolve("/p", "/etc/passwd") |> is_err
+  assert project.resolve("/p", "../x") |> is_err
+  assert project.resolve("/p", "docs/../../x") |> is_err
+}
+
+test "a write is atomic and leaves no temporary file" {
+  let root = scratch()
+  let r = project.with_project(root, () => {
+    Project.write("ch1.md", "first") |> ignore
+    Project.write("ch1.md", "second") |> ignore
+    Project.read("ch1.md")
+  })
+  assert r == Ok("second")
+  assert not file.exists("#{root}/.ch1.md.motu-tmp")
+}
+
+test "a command cannot read outside the project" {
+  let root = scratch()
+  let r = project.with_project(root, () => Project.read("../../etc/hosts"))
+  assert r |> is_err
+}
+
+fn is_err[a](r: Result[a, String]) : Bool = match r {
+  Ok(_)  -> false
+  Err(_) -> true
+}

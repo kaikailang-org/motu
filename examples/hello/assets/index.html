@@ -36,7 +36,7 @@
     let cancelled = ''; try { cancelled = await slow; } catch (e) { cancelled = e.message; }
     const cms = (performance.now() - c0).toFixed(0);
     await motu.invoke('ping');
-    await motu.invoke('report', `${hi} | ${n} pings: ${per} us each | error path: ${err} | slow: ${cancelled} after ${cms} ms`);
+    await motu.invoke('motu.report', `${hi} | ${n} pings: ${per} us each | error path: ${err} | slow: ${cancelled} after ${cms} ms`);
   })();
 </script>
 </body>

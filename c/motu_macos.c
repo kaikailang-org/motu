@@ -685,10 +685,34 @@ void motu_quit(void) {
   });
 }
 
+/* Length of the valid UTF-8 sequence at s, or 0. */
+static int utf8_seq(const unsigned char *s) {
+  if (s[0] < 0x80) return 1;
+  int n = s[0] >= 0xC2 && s[0] <= 0xDF ? 2 : s[0] >= 0xE0 && s[0] <= 0xEF ? 3 : s[0] >= 0xF0 && s[0] <= 0xF4 ? 4 : 0;
+  if (n == 0) return 0;
+  for (int i = 1; i < n; i++)
+    if ((s[i] & 0xC0) != 0x80) return 0;
+  if (n == 3 && ((s[0] == 0xE0 && s[1] < 0xA0) || (s[0] == 0xED && s[1] >= 0xA0))) return 0;
+  if (n == 4 && ((s[0] == 0xF0 && s[1] < 0x90) || (s[0] == 0xF4 && s[1] >= 0x90))) return 0;
+  return n;
+}
+
+/* NSString refuses invalid UTF-8 outright, so each bad byte becomes U+FFFD. */
+static void buf_put_valid_utf8(Buf *b, const char *text) {
+  const unsigned char *s = (const unsigned char *)text;
+  while (*s) {
+    int n = utf8_seq(s);
+    if (n) { buf_put(b, (const char *)s, (size_t)n); s += n; }
+    else { buf_put(b, "\xEF\xBF\xBD", 3); s++; }
+  }
+}
+
 void motu_post(int64_t win, const char *json) {
-  size_t n = strlen(json) + 32;
-  char *js = malloc(n);
-  snprintf(js, n, "window.__motu_recv(%s)", json);
+  Buf b = {0};
+  buf_put(&b, "window.__motu_recv(", 19);
+  buf_put_valid_utf8(&b, json);
+  buf_put(&b, ")", 1);
+  char *js = b.p;
   dispatch_async(dispatch_get_main_queue(), ^{
     if (valid(win))
       MSG(void, id, id)(g_views[win], SEL_("evaluateJavaScript:completionHandler:"), nsstr(js), (id)0);

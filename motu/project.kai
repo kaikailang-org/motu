@@ -1,0 +1,83 @@
+#[doc("""
+The `Project` capability: files inside one directory, the open project. A
+command that performs `Project` cannot reach a path outside it: every path is
+relative to the root, and one that is absolute or climbs out with `..` is
+refused. Writes are atomic — a temporary file, flushed to the disk, renamed
+over the target — so a crash leaves the old text or the new, never half.
+""")]
+import fs.dir
+import fs.file
+import motu.shim
+
+#[doc("Files and directories under the project root; every path is relative to it.")]
+pub effect Project {
+  root() : String
+  read(path: String) : Result[String, String]
+  write(path: String, text: String) : Result[Unit, String]
+  exists(path: String) : Bool
+  list(dir: String) : Result[[String], String]
+  make_dir(path: String) : Result[Unit, String]
+  remove(path: String) : Result[Unit, String]
+  move(from: String, to: String) : Result[Unit, String]
+}
+
+# Lexical normalisation: drops "." and empty segments, refuses ".." and absolute paths.
+fn segments(path: String) : Result[[String], String] =
+  if string.starts_with(path, "/") {
+    Err("absolute path refused: #{path}")
+  } else {
+    let parts = string.split(path, "/") |? (p => p != "" and p != ".")
+    if list.contains(parts, "..") { Err("path leaves the project: #{path}") } else { Ok(parts) }
+  }
+
+#[doc("The absolute path of `path` under `root`, or why it is refused.")]
+pub fn resolve(root: String, path: String) : Result[String, String] =
+  match segments(path) {
+    Err(e) -> Err(e)
+    Ok([]) -> Ok(root)
+    Ok(ps) -> Ok("#{root}/#{string.join(ps, "/")}")
+  }
+
+fn parent_of(path: String) : String = match string.last_index_of(path, "/") {
+  Some(i) -> string.slice(path, 0, i)
+  None    -> "."
+}
+
+#[doc("Writes `text` to `full` atomically: temporary file, flush, rename.")]
+pub fn write_atomic(full: String, text: String) : Result[Unit, String] / File + Ffi = {
+  let tmp = "#{parent_of(full)}/.#{string.slice(full, string.length(parent_of(full)) + 1, string.length(full))}.motu-tmp"
+  match write_file(tmp, text) {
+    Err(e) -> Err(e)
+    Ok(_)  -> if shim.motu_fsync_path(tmp) != 0 {
+      file.delete(tmp) |> ignore
+      Err("could not flush #{tmp} to the disk")
+    } else {
+      file.rename(tmp, full)
+    }
+  }
+}
+
+fn under[t](root: String, path: String, f: (String) -> Result[t, String] / File + Ffi) : Result[t, String] / File + Ffi =
+  match resolve(root, path) {
+    Ok(full) -> f(full)
+    Err(e)   -> Err(e)
+  }
+
+fn listing(full: String) : Result[[String], String] / File =
+  if file.exists(full) { Ok(dir.list_dir(full)) } else { Err("no such directory") }
+
+#[doc("Runs `body` with `Project` answered by the directory `root`.")]
+pub fn with_project[r, e](root: String, body: () -> r / Project + e) : r / File + Ffi + e =
+  handle { body() } with Project {
+    root(resume)             -> resume(root)
+    read(path, resume)       -> resume(under(root, path, full => read_file(full)))
+    write(path, text, resume) -> resume(under(root, path, full => write_atomic(full, text)))
+    exists(path, resume)     -> resume(match resolve(root, path) { Ok(full) -> file.exists(full); Err(_) -> false })
+    list(path, resume)       -> resume(under(root, path, full => listing(full)))
+    make_dir(path, resume)   -> resume(under(root, path, full => dir.create_dir(full)))
+    remove(path, resume)     -> resume(under(root, path, full => file.delete(full)))
+    move(from, to, resume)   -> resume(match resolve(root, to) {
+      Ok(dest) -> under(root, from, full => file.rename(full, dest))
+      Err(e)   -> Err(e)
+    })
+  }
