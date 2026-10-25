@@ -1,0 +1,48 @@
+import fs.dir
+import encoding.json
+import encoding.json_bind
+import motu.project
+import examples.book.commands
+import examples.book.model
+
+fn scratch(name: String) : String / File = {
+  let d = "#{dir.temp_dir()}/motu-book-#{name}"
+  dir.create_dir(d) |> ignore
+  d
+}
+
+fn first_doc(v: JsonValue) : String = match json.get(v, "nodes") {
+  JArr(xs) -> xs |> list.find(x => json.as_string(json.get(x, "kind")) == Some("doc")) |> (o => match o { Some(x) -> json.as_string(json.get(x, "id")) ?? ""; None -> "" })
+  _ -> ""
+}
+
+test "a new project opens, saves a chapter, counts and finds it" {
+  let root = scratch("a")
+  let r = project.with_project(root, () => {
+    let created = ok(commands.create("Night Ferry", "Ana")) ?? JNull
+    let id = first_doc(created)
+    let m = Meta { title: "The harbour", synopsis: "Ana arrives.", label: "draft", status: "to do", keywords: [], target: 2000 }
+    commands.save(id, m, "The ferry came in after dark. The lights failed.") |> ignore
+    let st = ok(commands.stats()) ?? JNull
+    let found = ok(commands.find("lights ferry")) ?? JNull
+    let renamed = ok(commands.load()) ?? model.fresh("", "", "")
+    (json.as_int(json.get(st, "manuscript")), found == JArr([JStr(id)]), (renamed.nodes |> list.find(n => n.id == id)) |> (o => match o { Some(n) -> n.title; None -> "" }))
+  })
+  assert r.fst == Some(9)
+  assert r.snd
+  assert r.trd == "The harbour"
+}
+
+test "snapshots restore the earlier text" {
+  let root = scratch("b")
+  let r = project.with_project(root, () => {
+    let id = first_doc(ok(commands.create("B", "A")) ?? JNull)
+    let m = model.meta_of("", "One")
+    commands.save(id, m, "first version") |> ignore
+    let name = json.as_string(ok(commands.snapshot(id)) ?? JNull) ?? ""
+    commands.save(id, m, "second version") |> ignore
+    commands.restore(id, name) |> ignore
+    json.as_string(json.get(ok(commands.read(id)) ?? JNull, "body")) ?? ""
+  })
+  assert r == "first version"
+}

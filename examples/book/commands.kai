@@ -1,0 +1,248 @@
+#[doc("The book's commands that work inside one open project.")]
+import fs.file
+import time
+import uuid
+import date.rfc3339
+import encoding.json
+import encoding.json_bind
+import motu.app
+import motu.project
+import motu.search
+import examples.book.model
+
+#[doc("A short random id for a new node.")]
+pub fn new_id() : String / Random = string.byte_slice(string.replace(uuid.v4(), "-", ""), 0, 12) ?? "node"
+
+fn ok_json[a](r: Result[a, String], f: (a) -> JsonValue) : Result[JsonValue, String] = match r {
+  Ok(v)  -> Ok(f(v))
+  Err(e) -> Err(e)
+}
+
+#[doc("Reads `project.toml`.")]
+pub fn load() : Result[Book, String] / Project = match Project.read("project.toml") {
+  Ok(text) -> model.book_of(text)
+  Err(e)   -> Err("not a book project: #{e}")
+}
+
+fn store(b: Book) : Result[Book, String] / Project = match Project.write("project.toml", model.book_text(b)) {
+  Ok(_)  -> Ok(b)
+  Err(e) -> Err(e)
+}
+
+fn edit(f: (Book) -> Result[Book, String]) : Result[JsonValue, String] / Project = match load() {
+  Err(e) -> Err(e)
+  Ok(b)  -> ok_json(match f(b) { Ok(nb) -> store(nb); Err(e) -> Err(e) }, model.book_json)
+}
+
+fn read_doc(n: Node) : (Meta, String) / Project = match Project.read(model.doc_path(n.id)) {
+  Ok(text) -> {
+    let (front, body) = model.split_front(text)
+    (model.meta_of(front, n.title), body)
+  }
+  Err(_) -> (model.meta_of("", n.title), "")
+}
+
+fn node_by(b: Book, id: String) : Option[Node] = b.nodes |> list.find(n => n.id == id)
+
+fn with_node[e](id: String, f: (Book, Node) -> Result[JsonValue, String] / Project + e) : Result[JsonValue, String] / Project + e =
+  match load() {
+    Err(e) -> Err(e)
+    Ok(b)  -> match node_by(b, id) {
+      Some(n) -> f(b, n)
+      None    -> Err("no node #{id}")
+    }
+  }
+
+#[doc("Creates the bundle at the project root: folders, `project.toml` and the first chapter.")]
+pub fn create(title: String, author: String) : Result[JsonValue, String] / Project + Random = {
+  ["docs", "notes", "snapshots", "research"] |! (d => Project.make_dir(d) |> ignore)
+  let first = new_id()
+  let b = model.fresh(title, author, first)
+  let meta = model.meta_of("", "Chapter One")
+  match Project.write(model.doc_path(first), model.doc_text(meta, "")) {
+    Err(e) -> Err(e)
+    Ok(_)  -> ok_json(store(b), model.book_json)
+  }
+}
+
+fn word_total(text: String) : Int = list.length(search.words(text))
+
+#[doc("Word counts of every text document, and the manuscript's total.")]
+pub fn stats() : Result[JsonValue, String] / Project = match load() {
+  Err(e) -> Err(e)
+  Ok(b)  -> {
+    let docs = b.nodes |? (n => n.kind == "doc")
+    let counts = docs | (n => (n.id, word_total(read_doc(n).snd)))
+    let manuscript = model.manuscript_order(b) | (n => n.id)
+    let total = counts |? (c => list.contains(manuscript, c.fst)) |> list.foldl(0, (t, c) => t + c.snd)
+    Ok(JObj([
+      ("words", JObj(counts | (c => (c.fst, JNum(c.snd))))),
+      ("manuscript", JNum(total)),
+    ]))
+  }
+}
+
+#[doc("Adds a node: a folder, or a document with an empty file.")]
+pub fn add(parent: String, kind: String, title: String, index: Int) : Result[JsonValue, String] / Project + Random = {
+  let id = new_id()
+  let n = Node { id: id, parent: parent, kind: kind, title: title, file: "" }
+  let written = if kind == "doc" {
+    Project.write(model.doc_path(id), model.doc_text(model.meta_of("", title), ""))
+  } else { Ok(()) }
+  match written {
+    Err(e) -> Err(e)
+    Ok(_)  -> match edit(b => Ok(model.place(b, n, parent, index))) {
+      Ok(v)  -> Ok(JObj([("id", JStr(id)), ("book", v)]))
+      Err(e) -> Err(e)
+    }
+  }
+}
+
+#[doc("Renames a node in the binder and, for a document, in its front matter.")]
+pub fn rename(id: String, title: String) : Result[JsonValue, String] / Project =
+  with_node(id, (b, n) => {
+    if n.kind == "doc" {
+      let (m, body) = read_doc(n)
+      Project.write(model.doc_path(id), model.doc_text(Meta { ...m, title: title }, body)) |> ignore
+    }
+    edit(bk => Ok(model.rename(bk, id, title)))
+  })
+
+#[doc("Moves a node under `parent` at `index`.")]
+pub fn move(id: String, parent: String, index: Int) : Result[JsonValue, String] / Project =
+  edit(b => model.move(b, id, parent, index))
+
+fn remove_files(b: Book, id: String) : Unit / Project = match node_by(b, id) {
+  Some(n) if n.kind == "doc" -> {
+    Project.remove(model.doc_path(id)) |> ignore
+    Project.remove(model.notes_path(id)) |> ignore
+  }
+  Some(n) if n.kind == "research" -> Project.remove(n.file) |> ignore
+  _ -> ()
+}
+
+#[doc("Deletes everything in the trash, files included.")]
+pub fn empty_trash() : Result[JsonValue, String] / Project = match load() {
+  Err(e) -> Err(e)
+  Ok(b)  -> {
+    let doomed = model.children(b, model.TRASH) || (n => model.subtree(b, n.id))
+    doomed |! (id => remove_files(b, id))
+    ok_json(store(model.without(b, doomed)), model.book_json)
+  }
+}
+
+#[doc("A document's metadata, text and notes.")]
+pub fn read(id: String) : Result[JsonValue, String] / Project =
+  with_node(id, (b, n) => {
+    let (m, body) = read_doc(n)
+    let notes = ok(Project.read(model.notes_path(id))) ?? ""
+    Ok(JObj([("meta", model.meta_json(m)), ("body", JStr(body)), ("notes", JStr(notes)), ("node", model.node_json(n))]))
+  })
+
+#[doc("Saves a document's metadata and text; the binder title follows the metadata.")]
+pub fn save(id: String, meta: Meta, body: String) : Result[JsonValue, String] / Project =
+  with_node(id, (b, n) => match Project.write(model.doc_path(id), model.doc_text(meta, body)) {
+    Err(e) -> Err(e)
+    Ok(_)  -> if meta.title != n.title and meta.title != "" {
+      edit(bk => Ok(model.rename(bk, id, meta.title)))
+    } else {
+      Ok(JNum(word_total(body)))
+    }
+  })
+
+#[doc("Saves a document's notes.")]
+pub fn save_notes(id: String, text: String) : Result[JsonValue, String] / Project =
+  ok_json(Project.write(model.notes_path(id), text), (u => JNull))
+
+fn stamp_of(t: WallTime) : String = string.replace(rfc3339.format(WallTime { secs: t.secs, nanos: 0 }), ":", "-")
+
+fn free_name(dir: String, base: String, n: Int) : String / Project = {
+  let name = if n == 1 { base } else { "#{base}-#{n}" }
+  if Project.exists("#{dir}/#{name}.md") { free_name(dir, base, n + 1) } else { name }
+}
+
+#[doc("Copies the document's current text into its snapshots, named by the time.")]
+pub fn snapshot(id: String) : Result[JsonValue, String] / Project + Clock =
+  with_node(id, (b, n) => match Project.read(model.doc_path(id)) {
+    Err(e)   -> Err(e)
+    Ok(text) -> {
+      Project.make_dir("snapshots") |> ignore
+      Project.make_dir(model.snapshots_dir(id)) |> ignore
+      let name = free_name(model.snapshots_dir(id), stamp_of(time.now()), 1)
+      ok_json(Project.write("#{model.snapshots_dir(id)}/#{name}.md", text), (u => JStr(name)))
+    }
+  })
+
+#[doc("The snapshot names of a document, newest first.")]
+pub fn snapshots(id: String) : Result[JsonValue, String] / Project = match Project.list(model.snapshots_dir(id)) {
+  Ok(names) -> Ok(JArr(list.reverse(list.sort(names |? (x => string.ends_with(x, ".md")))) | (x => JStr(string.drop_suffix(x, ".md") ?? x))))
+  Err(_)    -> Ok(JArr([]))
+}
+
+#[doc("A snapshot's body.")]
+pub fn snapshot_body(id: String, name: String) : Result[JsonValue, String] / Project =
+  ok_json(Project.read("#{model.snapshots_dir(id)}/#{name}.md"), (text => JStr(model.split_front(text).snd)))
+
+#[doc("Replaces the document with a snapshot, after taking a snapshot of the current text.")]
+pub fn restore(id: String, name: String) : Result[JsonValue, String] / Project + Clock = match snapshot(id) {
+  Err(e) -> Err(e)
+  Ok(_)  -> match Project.read("#{model.snapshots_dir(id)}/#{name}.md") {
+    Err(e)   -> Err(e)
+    Ok(text) -> ok_json(Project.write(model.doc_path(id), text), (u => JNull))
+  }
+}
+
+#[doc("Ids of the documents whose text, notes or synopsis hold every word of `query`.")]
+pub fn find(query: String) : Result[JsonValue, String] / Project = match load() {
+  Err(e) -> Err(e)
+  Ok(b)  -> {
+    let docs = b.nodes |? (n => n.kind == "doc")
+    let ix = docs |> list.foldl(search.empty(), (ix, n) => {
+      let (m, body) = read_doc(n)
+      let notes = ok(Project.read(model.notes_path(n.id))) ?? ""
+      search.add(ix, n.id, "#{m.title} #{m.synopsis} #{string.join(m.keywords, " ")} #{body} #{notes}")
+    })
+    Ok(JArr(search.find(ix, query) | (id => JStr(id))))
+  }
+}
+
+fn extension(path: String) : String = match string.last_index_of(path, ".") {
+  Some(i) -> string.byte_slice(path, i, string.byte_length(path) - i) ?? ""
+  None    -> ""
+}
+
+fn file_name(path: String) : String = match string.last_index_of(path, "/") {
+  Some(i) -> string.byte_slice(path, i + 1, string.byte_length(path) - i - 1) ?? path
+  None    -> path
+}
+
+fn import_one(path: String) : Result[Node, String] / Project + File + Random = match file.read_bytes(path) {
+  Err(e)    -> Err(e)
+  Ok(bytes) -> {
+    let id = new_id()
+    let rel = "research/#{id}#{string.to_lower(extension(path))}"
+    match project.resolve(Project.root(), rel) {
+      Err(e)   -> Err(e)
+      Ok(dest) -> match file.write_bytes(dest, bytes) {
+        Err(e) -> Err(e)
+        Ok(_)  -> Ok(Node { id: id, parent: model.RESEARCH, kind: "research", title: file_name(path), file: rel })
+      }
+    }
+  }
+}
+
+#[doc("Copies files from outside into the project's research folder and adds them to the binder.")]
+pub fn import_files(paths: [String]) : Result[JsonValue, String] / Project + File + Random = {
+  Project.make_dir("research") |> ignore
+  let nodes = paths || (p => match import_one(p) { Ok(n) -> [n]; Err(_) -> [] })
+  edit(b => Ok(nodes |> list.foldl(b, (bk, n) => model.place(bk, n, model.RESEARCH, 1000000))))
+}
+
+#[doc("Saves the book's header: title, author, language, target, labels and statuses.")]
+pub fn save_book(v: JsonValue) : Result[JsonValue, String] / Project = edit(b => Ok(Book {
+  ...b,
+  title: json.as_string(json.get(v, "title")) ?? b.title,
+  author: json.as_string(json.get(v, "author")) ?? b.author,
+  language: json.as_string(json.get(v, "language")) ?? b.language,
+  target: json.as_int(json.get(v, "target")) ?? b.target,
+}))

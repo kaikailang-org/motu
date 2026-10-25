@@ -1,0 +1,214 @@
+#[doc("""
+The book project on disk: `project.toml` holds the binder and what spans
+documents; each document is `docs/<id>.md`, Markdown with TOML front matter.
+""")]
+import encoding.toml
+import encoding.json
+import encoding.json_bind
+import motu.project
+
+#[doc("One entry of the binder: a folder, a text document, or an imported research file.")]
+pub type Node = { id: String, parent: String, kind: String, title: String, file: String }
+
+#[doc("What `project.toml` holds.")]
+pub type Book = {
+  title: String,
+  author: String,
+  language: String,
+  target: Int,
+  labels: [String],
+  statuses: [String],
+  nodes: [Node],
+}
+
+#[doc("A document's metadata, kept in its front matter.")]
+pub type Meta = { title: String, synopsis: String, label: String, status: String, keywords: [String], target: Int }
+
+#[doc("The ids of the three folders every project has.")]
+pub const MANUSCRIPT : String = "manuscript"
+pub const RESEARCH : String = "research"
+pub const TRASH : String = "trash"
+
+fn folder(id: String, title: String) : Node = Node { id: id, parent: "", kind: "folder", title: title, file: "" }
+
+#[doc("A new project with its three folders and one empty chapter.")]
+pub fn fresh(title: String, author: String, first_id: String) : Book = Book {
+  title: title, author: author, language: "en", target: 0,
+  labels: ["none", "draft", "revised", "final"],
+  statuses: ["to do", "first draft", "revised", "done"],
+  nodes: [
+    folder(MANUSCRIPT, "Manuscript"), folder(RESEARCH, "Research"), folder(TRASH, "Trash"),
+    Node { id: first_id, parent: MANUSCRIPT, kind: "doc", title: "Chapter One", file: "" },
+  ],
+}
+
+# --- TOML ---
+
+fn str_of(ps: [Pair[String, TomlValue]], k: String) : String = match toml.pairs_get(ps, k) {
+  Some(TStr(s)) -> s
+  _             -> ""
+}
+
+fn int_of(ps: [Pair[String, TomlValue]], k: String) : Int = match toml.pairs_get(ps, k) {
+  Some(TInt(n)) -> n
+  _             -> 0
+}
+
+fn strs_of(ps: [Pair[String, TomlValue]], k: String) : [String] = match toml.pairs_get(ps, k) {
+  Some(TArr(xs)) -> xs || (x => match x { TStr(s) -> [s]; _ -> [] })
+  _              -> []
+}
+
+fn node_of(v: TomlValue) : [Node] = match v {
+  TTbl(ps) -> [Node { id: str_of(ps, "id"), parent: str_of(ps, "parent"), kind: str_of(ps, "kind"), title: str_of(ps, "title"), file: str_of(ps, "file") }]
+  _        -> []
+}
+
+#[doc("Reads `project.toml` text.")]
+pub fn book_of(text: String) : Result[Book, String] = match toml.decode_report(text) {
+  Err(e)        -> Err(toml.error_message(e))
+  Ok(TTbl(ps))  -> Ok(Book {
+    title: str_of(ps, "title"), author: str_of(ps, "author"), language: str_of(ps, "language"),
+    target: int_of(ps, "target"), labels: strs_of(ps, "labels"), statuses: strs_of(ps, "statuses"),
+    nodes: match toml.pairs_get(ps, "node") { Some(TArr(xs)) -> xs || node_of; _ -> [] },
+  })
+  Ok(_)         -> Err("project.toml is not a table")
+}
+
+fn strs(xs: [String]) : TomlValue = TArr(xs | (x => TStr(x)))
+
+fn node_toml(n: Node) : TomlValue =
+  TTbl([("id", TStr(n.id)), ("parent", TStr(n.parent)), ("kind", TStr(n.kind)), ("title", TStr(n.title)), ("file", TStr(n.file))])
+
+#[doc("The text of `project.toml` for `b`.")]
+pub fn book_text(b: Book) : String = toml.encode(TTbl([
+  ("title", TStr(b.title)), ("author", TStr(b.author)), ("language", TStr(b.language)),
+  ("target", TInt(b.target)), ("labels", strs(b.labels)), ("statuses", strs(b.statuses)),
+  ("node", TArr(b.nodes | node_toml)),
+]))
+
+# --- documents ---
+
+#[doc("Splits a leading `+++` TOML block from the Markdown body.")]
+pub fn split_front(text: String) : (String, String) =
+  if not string.starts_with(text, "+++\n") {
+    ("", text)
+  } else {
+    let rest = string.byte_slice(text, 4, string.byte_length(text) - 4) ?? ""
+    match string.index_of(rest, "\n+++") {
+      None    -> ("", text)
+      Some(i) -> {
+        let after = if string.byte_length(rest) > i + 4 { i + 5 } else { i + 4 }
+        let body = string.byte_slice(rest, after, string.byte_length(rest) - after) ?? ""
+        (string.byte_slice(rest, 0, i) ?? "", if string.starts_with(body, "\n") { string.drop_prefix(body, "\n") ?? body } else { body })
+      }
+    }
+  }
+
+#[doc("A document's metadata from its front matter; empty fields when absent.")]
+pub fn meta_of(front: String, fallback_title: String) : Meta = match toml.decode(front) {
+  Some(TTbl(ps)) -> Meta {
+    title: if str_of(ps, "title") == "" { fallback_title } else { str_of(ps, "title") },
+    synopsis: str_of(ps, "synopsis"), label: str_of(ps, "label"), status: str_of(ps, "status"),
+    keywords: strs_of(ps, "keywords"), target: int_of(ps, "target"),
+  }
+  _ -> Meta { title: fallback_title, synopsis: "", label: "", status: "", keywords: [], target: 0 }
+}
+
+#[doc("A document file: front matter from `m`, then the body.")]
+pub fn doc_text(m: Meta, body: String) : String = {
+  let front = toml.encode(TTbl([
+    ("title", TStr(m.title)), ("synopsis", TStr(m.synopsis)), ("label", TStr(m.label)),
+    ("status", TStr(m.status)), ("keywords", strs(m.keywords)), ("target", TInt(m.target)),
+  ]))
+  "+++\n#{front}+++\n\n#{body}"
+}
+
+#[doc("The relative path of a document's text, notes or snapshot directory.")]
+pub fn doc_path(id: String) : String = "docs/#{id}.md"
+pub fn notes_path(id: String) : String = "notes/#{id}.md"
+pub fn snapshots_dir(id: String) : String = "snapshots/#{id}"
+
+# --- JSON for the page ---
+
+#[doc("A node as the page sees it.")]
+pub fn node_json(n: Node) : JsonValue =
+  JObj([("id", JStr(n.id)), ("parent", JStr(n.parent)), ("kind", JStr(n.kind)), ("title", JStr(n.title)), ("file", JStr(n.file))])
+
+#[doc("Metadata as the page sees it.")]
+pub fn meta_json(m: Meta) : JsonValue = JObj([
+  ("title", JStr(m.title)), ("synopsis", JStr(m.synopsis)), ("label", JStr(m.label)), ("status", JStr(m.status)),
+  ("keywords", JArr(m.keywords | (k => JStr(k)))), ("target", JNum(m.target)),
+])
+
+fn jstr(v: JsonValue, k: String) : String = json.as_string(json.get(v, k)) ?? ""
+
+#[doc("Metadata sent by the page.")]
+pub fn meta_from(v: JsonValue) : Meta = Meta {
+  title: jstr(v, "title"), synopsis: jstr(v, "synopsis"), label: jstr(v, "label"), status: jstr(v, "status"),
+  keywords: match json.get(v, "keywords") { JArr(xs) -> xs || (x => match x { JStr(s) -> [s]; _ -> [] }); _ -> [] },
+  target: json.as_int(json.get(v, "target")) ?? 0,
+}
+
+#[doc("The book's header fields as the page sees them.")]
+pub fn book_json(b: Book) : JsonValue = JObj([
+  ("title", JStr(b.title)), ("author", JStr(b.author)), ("language", JStr(b.language)), ("target", JNum(b.target)),
+  ("labels", JArr(b.labels | (x => JStr(x)))), ("statuses", JArr(b.statuses | (x => JStr(x)))),
+  ("nodes", JArr(b.nodes | node_json)),
+])
+
+# --- binder edits ---
+
+#[doc("The children of `parent`, in binder order.")]
+pub fn children(b: Book, parent: String) : [Node] = b.nodes |? (n => n.parent == parent)
+
+fn renamed(n: Node, id: String, title: String) : Node = if n.id == id { Node { ...n, title: title } } else { n }
+
+#[doc("The book with node `id` titled `title`.")]
+pub fn rename(b: Book, id: String, title: String) : Book = Book { ...b, nodes: b.nodes | (n => renamed(n, id, title)) }
+
+fn is_under(b: Book, id: String, ancestor: String) : Bool =
+  if id == ancestor { true } else {
+    match b.nodes |> list.find(n => n.id == id) {
+      Some(n) if n.parent != "" -> is_under(b, n.parent, ancestor)
+      _                         -> false
+    }
+  }
+
+fn insert_at(xs: [Node], node: Node, parent: String, index: Int, seen: Int) : [Node] = match xs {
+  [] -> [node]
+  [x, ...rest] -> if x.parent == parent and seen == index {
+    [node, x, ...rest]
+  } else if x.parent == parent {
+    [x, ...insert_at(rest, node, parent, index, seen + 1)]
+  } else {
+    [x, ...insert_at(rest, node, parent, index, seen)]
+  }
+}
+
+#[doc("The book with `node` placed as child number `index` of `parent` (at the end when past the last).")]
+pub fn place(b: Book, node: Node, parent: String, index: Int) : Book = {
+  let others = b.nodes |? (n => n.id != node.id)
+  Book { ...b, nodes: insert_at(others, Node { ...node, parent: parent }, parent, index, 0) }
+}
+
+#[doc("Moves node `id` under `parent` at `index`; refuses a move into its own subtree.")]
+pub fn move(b: Book, id: String, parent: String, index: Int) : Result[Book, String] =
+  match b.nodes |> list.find(n => n.id == id) {
+    None    -> Err("no node #{id}")
+    Some(n) -> if n.parent == "" { Err("a top-level folder stays where it is") }
+      else if is_under(b, parent, id) { Err("a folder cannot move into itself") }
+      else { Ok(place(b, n, parent, index)) }
+  }
+
+#[doc("The ids of the documents in the manuscript, in reading order.")]
+pub fn manuscript_order(b: Book) : [Node] = walk(b, MANUSCRIPT)
+
+fn walk(b: Book, parent: String) : [Node] =
+  children(b, parent) || (n => [n, ...walk(b, n.id)])
+
+#[doc("Ids of `id` and everything under it.")]
+pub fn subtree(b: Book, id: String) : [String] = [id, ...(walk(b, id) | (n => n.id))]
+
+#[doc("The book without the nodes in `ids`.")]
+pub fn without(b: Book, ids: [String]) : Book = Book { ...b, nodes: b.nodes |? (n => not list.contains(ids, n.id)) }

@@ -1,0 +1,29 @@
+import examples.book.model
+
+test "project.toml round-trips" {
+  let b = model.fresh("My Novel", "Ana", "c1")
+  assert model.book_of(model.book_text(b)) == Ok(b)
+}
+
+test "front matter splits and recomposes" {
+  let m = Meta { title: "The harbour", synopsis: "Ana arrives.", label: "draft", status: "to do", keywords: ["night"], target: 3000 }
+  let text = model.doc_text(m, "The ferry came in.\n")
+  let (front, body) = model.split_front(text)
+  assert body == "The ferry came in.\n"
+  assert model.meta_of(front, "x") == m
+  assert model.split_front("no front matter") == ("", "no front matter")
+}
+
+test "moving a node keeps order and refuses cycles" {
+  let b0 = model.fresh("B", "A", "c1")
+  let b1 = model.place(b0, Node { id: "c2", parent: "", kind: "doc", title: "Two", file: "" }, "manuscript", 99)
+  assert (model.manuscript_order(b1) | (n => n.id)) == ["c1", "c2"]
+  let b2 = ok(model.move(b1, "c2", "manuscript", 0)) ?? b1
+  assert (model.manuscript_order(b2) | (n => n.id)) == ["c2", "c1"]
+  let f = model.place(b2, Node { id: "part", parent: "", kind: "folder", title: "Part", file: "" }, "manuscript", 0)
+  let inside = ok(model.move(f, "c1", "part", 0)) ?? f
+  assert (model.manuscript_order(inside) | (n => n.id)) == ["part", "c1", "c2"]
+  assert model.move(inside, "part", "c1", 0) |> is_err
+}
+
+fn is_err[a](r: Result[a, String]) : Bool = match r { Ok(_) -> false; Err(_) -> true }
