@@ -1,0 +1,20 @@
+import motu.search
+
+test "words fold case and split on punctuation" {
+  assert list.sort(search.words("The cat, the HAT.")) == ["cat", "hat", "the", "the"]
+  assert search.words("") == []
+}
+
+test "find returns documents holding every word" {
+  let ix = search.empty()
+    |> search.add("a", "Ana arrives the night the lights fail")
+    |> search.add("b", "The lights come back at dawn")
+  assert list.sort(search.find(ix, "lights")) == ["a", "b"]
+  assert search.find(ix, "lights night") == ["a"]
+  assert search.find(ix, "ferry") == []
+}
+
+test "non-ASCII words survive" {
+  let ix = search.empty() |> search.add("c", "Mañana llegó el barco")
+  assert search.find(ix, "mañana") == ["c"]
+}

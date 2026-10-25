@@ -38,14 +38,15 @@ pub fn resolve(root: String, path: String) : Result[String, String] =
     Ok(ps) -> Ok("#{root}/#{string.join(ps, "/")}")
   }
 
-fn parent_of(path: String) : String = match string.last_index_of(path, "/") {
-  Some(i) -> string.slice(path, 0, i)
-  None    -> "."
+fn split_last(path: String) : (String, String) = match string.last_index_of(path, "/") {
+  Some(i) -> (string.byte_slice(path, 0, i) ?? ".", string.byte_slice(path, i + 1, string.byte_length(path) - i - 1) ?? path)
+  None    -> (".", path)
 }
 
 #[doc("Writes `text` to `full` atomically: temporary file, flush, rename.")]
 pub fn write_atomic(full: String, text: String) : Result[Unit, String] / File + Ffi = {
-  let tmp = "#{parent_of(full)}/.#{string.slice(full, string.length(parent_of(full)) + 1, string.length(full))}.motu-tmp"
+  let (dir, name) = split_last(full)
+  let tmp = "#{dir}/.#{name}.motu-tmp"
   match write_file(tmp, text) {
     Err(e) -> Err(e)
     Ok(_)  -> if shim.motu_fsync_path(tmp) != 0 {

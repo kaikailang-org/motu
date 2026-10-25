@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Notes</title>
+<style>
+  :root { color-scheme: light dark; font-family: -apple-system, system-ui, sans-serif; --line: #8884; --muted: #888; }
+  body { margin: 0; display: grid; grid-template-columns: 240px 1fr; height: 100vh; }
+  aside { border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  aside header { display: flex; gap: .4rem; padding: .6rem; border-bottom: 1px solid var(--line); }
+  aside input { flex: 1; min-width: 0; font: inherit; padding: .3rem .5rem; }
+  ul { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
+  li { padding: .45rem .7rem; cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  li.on { background: #3478f633; }
+  main { display: flex; flex-direction: column; }
+  textarea { flex: 1; border: 0; outline: 0; resize: none; padding: 1.5rem 2rem; font: 16px/1.6 ui-serif, Georgia, serif; background: transparent; color: inherit; }
+  footer { padding: .35rem .7rem; color: var(--muted); font-size: .8rem; border-top: 1px solid var(--line); display: flex; gap: .6rem; }
+  footer button { font-size: .8rem; }
+</style>
+</head>
+<body>
+<aside>
+  <header><button id="open">Folder…</button><input id="q" placeholder="Search"></header>
+  <ul id="list"></ul>
+  <footer><button id="new">New note</button></footer>
+</aside>
+<main>
+  <textarea id="text" placeholder="Choose a folder, then a note" disabled></textarea>
+  <footer><span id="status">No folder</span><span id="words"></span></footer>
+</main>
+<script>
+  let root = null, current = null, timer = null;
+  const $ = (id) => document.getElementById(id);
+  const call = (cmd, args = {}) => motu.invoke(cmd, { root, ...args });
+  const words = (t) => (t.match(/[\p{L}\p{N}']+/gu) || []).length;
+
+  async function refresh(filter) {
+    const all = await call('list');
+    const shown = filter ? all.filter((n) => filter.includes(n.name)) : all;
+    $('list').textContent = '';
+    for (const n of shown) {
+      const li = document.createElement('li');
+      li.textContent = n.title; li.className = n.name === current ? 'on' : '';
+      li.onclick = () => open(n.name);
+      $('list').appendChild(li);
+    }
+    return all;
+  }
+  async function open(name) {
+    await flush();
+    current = name;
+    $('text').value = await call('read', { name });
+    $('text').disabled = false; $('words').textContent = `${words($('text').value)} words`;
+    $('status').textContent = name;
+    refresh();
+  }
+  async function flush() {
+    if (!timer) return;
+    clearTimeout(timer); timer = null;
+    await call('save', { name: current, text: $('text').value });
+    $('status').textContent = `Saved ${current}`;
+  }
+  $('text').oninput = () => {
+    $('words').textContent = `${words($('text').value)} words`;
+    $('status').textContent = 'Editing…';
+    clearTimeout(timer); timer = setTimeout(flush, 600);
+  };
+  $('open').onclick = async () => { const p = await motu.invoke('pick'); if (p) { root = p; current = null; refresh(); $('status').textContent = p; } };
+  $('new').onclick = async () => { if (!root) return; const name = await call('new'); await refresh(); open(name); };
+  $('q').oninput = async () => { const q = $('q').value.trim(); refresh(q.length > 1 ? await call('search', { query: q }) : null); };
+
+  if (location.hash.startsWith('#selftest=')) (async () => {
+    root = decodeURIComponent(location.hash.slice(10));
+    const a = await call('new'); await call('save', { name: a, text: '# Harbour\n\nAna arrives the night the lights fail.' });
+    const b = await call('new'); await call('save', { name: b, text: '# Dawn\n\nThe lights come back.' });
+    const all = await refresh();
+    const hits = await call('search', { query: 'lights night' });
+    const back = await call('read', { name: a });
+    let refused = ''; try { await call('read', { name: '../outside.md' }); } catch (e) { refused = e.message; }
+    await motu.invoke('motu.report', `${all.map((n) => n.title).join(', ')} | search: ${hits.join(',')} | read back: ${back.length} bytes | refused: ${refused}`);
+  })();
+</script>
+</body>
+</html>

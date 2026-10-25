@@ -1,0 +1,113 @@
+import ffi
+import os.env
+import encoding.json
+import encoding.json_bind
+import motu.app
+import motu.desktop
+import motu.menu
+import motu.project
+import motu.search
+import motu.shim
+
+fn is_note(name: String) : Bool = string.ends_with(name, ".md") and not string.starts_with(name, ".")
+
+fn notes() : Result[[String], String] / Project = match Project.list("") {
+  Ok(names) -> Ok(list.sort(names |? is_note))
+  Err(e)    -> Err(e)
+}
+
+fn strip_hashes(s: String) : String =
+  if string.starts_with(s, "#") { strip_hashes(string.drop_prefix(s, "#") ?? s) } else { s }
+
+fn title_of(name: String) : String / Project = match Project.read(name) {
+  Ok(text) -> match string.lines(text) |> list.find(l => string.trim(l) != "") {
+    Some(l) -> string.trim(strip_hashes(string.trim(l)))
+    None    -> name
+  }
+  Err(_) -> name
+}
+
+fn listing() : Result[JsonValue, String] / Project = match notes() {
+  Ok(names) -> Ok(JArr(names | (n => JObj([("name", JStr(n)), ("title", JStr(title_of(n)))]))))
+  Err(e)    -> Err(e)
+}
+
+fn fresh_name(i: Int) : String / Project = {
+  let name = "note-#{i}.md"
+  if Project.exists(name) { fresh_name(i + 1) } else { name }
+}
+
+fn create() : Result[JsonValue, String] / Project = {
+  let name = fresh_name(1)
+  match Project.write(name, "# Untitled\n\n") {
+    Ok(_)  -> Ok(JStr(name))
+    Err(e) -> Err(e)
+  }
+}
+
+fn find(query: String) : Result[JsonValue, String] / Project = match notes() {
+  Ok(names) -> {
+    let ix = names |> list.foldl(search.empty(), (ix, n) => search.add(ix, n, ok(Project.read(n)) ?? ""))
+    Ok(JArr(list.sort(search.find(ix, query)) | (n => JStr(n))))
+  }
+  Err(e) -> Err(e)
+}
+
+fn in_project(c: Call) : Result[JsonValue, String] / Project = match c.cmd {
+  "list"   -> listing()
+  "new"    -> create()
+  "read"   -> match Project.read(app.arg_string(c, "name") ?? "") {
+    Ok(text) -> Ok(JStr(text))
+    Err(e)   -> Err(e)
+  }
+  "save"   -> match Project.write(app.arg_string(c, "name") ?? "", app.arg_string(c, "text") ?? "") {
+    Ok(_)  -> Ok(JNull)
+    Err(e) -> Err(e)
+  }
+  "search" -> find(app.arg_string(c, "query") ?? "")
+  other    -> Err("unknown command #{other}")
+}
+
+fn command(c: Call) : Result[JsonValue, String] / Dialog + File + Ffi = match c.cmd {
+  "pick" -> Ok(match Dialog.open_folder(c.win, "Choose a folder of notes") {
+    Some(p) -> JStr(p)
+    None    -> JNull
+  })
+  _ -> match app.arg_string(c, "root") {
+    Some(root) -> project.with_project(root, () => in_project(c))
+    None       -> Err("no folder open")
+  }
+}
+
+fn main() : Int / Spawn + Ffi + File + Stdout + Env = {
+  let cfg = Config {
+    name: "Notes", assets: "examples/notes/assets", page: env.get("MOTU_PAGE") ?? "index.html",
+    title: "Notes", width: 900, height: 600, menus: [menu.edit_menu()],
+  }
+  app.run(cfg, c => command(c), ev => app.default_event(ev))
+}
+
+extern "C" fn motu_on_message(ud: Userdata, win: Int, json: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, PageMessage(win, json))
+}
+
+extern "C" fn motu_on_window_event(ud: Userdata, win: Int, kind: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, WindowEvent(win, kind))
+}
+
+extern "C" fn motu_on_menu(ud: Userdata, id: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, MenuChosen(id))
+}
+
+extern "C" fn motu_on_drop(ud: Userdata, win: Int, paths: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, Dropped(win, paths))
+}
+
+extern "C" fn motu_on_reply(ud: Userdata, json: String) : Unit = {
+  let pid: Pid[String] = take_userdata(ud)
+  mailbox_send(pid, json)
+}

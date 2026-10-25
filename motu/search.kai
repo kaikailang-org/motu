@@ -1,0 +1,46 @@
+#[doc("""
+A full-text index held in memory: documents by id, words folded to lower case.
+Rebuilt from the files when a project opens; no file of its own to go stale.
+""")]
+import collections.map
+
+#[doc("Word → ids of the documents that contain it.")]
+pub type Index = { words: Map[String, [String]] }
+
+#[doc("An index with nothing in it.")]
+pub fn empty() : Index = Index { words: map.empty() }
+
+fn is_word_byte(b: Int) : Bool =
+  (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b >= 128 or b == 39
+
+fn words_loop(s: String, i: Int, start: Int, acc: [String]) : [String] =
+  if i >= string.byte_length(s) {
+    if i > start { [string.byte_slice(s, start, i - start) ?? "", ...acc] } else { acc }
+  } else if is_word_byte(string_byte_at_int(s, i)) {
+    words_loop(s, i + 1, start, acc)
+  } else if i > start {
+    words_loop(s, i + 1, i + 1, [string.byte_slice(s, start, i - start) ?? "", ...acc])
+  } else {
+    words_loop(s, i + 1, i + 1, acc)
+  }
+
+#[doc("The words of `text`, lower case, in no particular order, repeats kept.")]
+pub fn words(text: String) : [String] = words_loop(string.to_lower(text), 0, 0, [])
+
+fn add_word(m: Map[String, [String]], w: String, id: String) : Map[String, [String]] =
+  match map.get(m, w) {
+    Some(ids) -> if list.contains(ids, id) { m } else { map.put(m, w, [id, ...ids]) }
+    None      -> map.put(m, w, [id])
+  }
+
+#[doc("Adds document `id` with `text` to the index.")]
+pub fn add(ix: Index, id: String, text: String) : Index =
+  Index { words: words(text) |> list.foldl(ix.words, (m, w) => add_word(m, w, id)) }
+
+fn ids_of(ix: Index, w: String) : [String] = map.get(ix.words, w) ?? []
+
+#[doc("Ids of the documents containing every word of `query`.")]
+pub fn find(ix: Index, query: String) : [String] = match words(query) {
+  []           -> []
+  [w, ...rest] -> rest |> list.foldl(ids_of(ix, w), (acc, x) => acc |? (id => list.contains(ids_of(ix, x), id)))
+}
