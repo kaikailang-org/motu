@@ -1,0 +1,151 @@
+#[doc("""
+A zip archive writer (PKWARE APPNOTE 6.3): local headers, the central
+directory and the end-of-central-directory record, with each entry
+stored or deflated and checked by CRC-32.
+
+The core is pure: `archive` turns entries into bytes, and the caller
+supplies every timestamp, so the same entries always give the same
+archive. Entries are written in order, which is what EPUB needs: its
+first entry is `mimetype`, stored, with no extra field. A deflated
+entry that does not shrink is stored instead. Names carry the UTF-8
+flag (bit 11) when they are not plain ASCII. There is no Zip64: an
+archive with more than 65 535 entries or 4 GiB is refused.
+""")]
+
+import motu.bytebuf
+import motu.crc32
+import motu.deflate
+import date
+import fs.file
+import time
+
+#[doc("How an entry's bytes are kept: as they are, or DEFLATE-compressed.")]
+pub type Method = Stored | Deflated
+
+#[doc("One file in an archive: its path inside the archive, its bytes, how to keep them, and its modification time.")]
+pub type Entry = { path: String, data: Array[Byte], method: Method, modified: WallTime }
+
+#[doc("An entry kept as is.")]
+pub fn stored(path: String, data: Array[Byte], modified: WallTime) : Entry =
+  Entry { path: path, data: data, method: Stored, modified: modified }
+
+#[doc("An entry kept DEFLATE-compressed.")]
+pub fn deflated(path: String, data: Array[Byte], modified: WallTime) : Entry =
+  Entry { path: path, data: data, method: Deflated, modified: modified }
+
+#[doc("An entry holding the UTF-8 bytes of `text`.")]
+pub fn text(path: String, text: String, method: Method, modified: WallTime) : Entry =
+  Entry { path: path, data: bytebuf.of_string(text), method: method, modified: modified }
+
+# ---- Timestamps -------------------------------------------------
+
+#[doc("The MS-DOS date and time of `t` read as UTC, packed as `date << 16 | time`; before 1980 it clamps to 1980-01-01 00:00:00.")]
+pub fn dos_datetime(t: WallTime) : Int =
+  if t.secs < 315532800 { bit_shl(33, 16) } else {
+    let d = date.from_walltime(t)
+    let s = t.secs % 86400
+    let day = bit_or(bit_or(bit_shl(d.year - 1980, 9), bit_shl(d.month, 5)), d.day)
+    let tod = bit_or(bit_or(bit_shl(s / 3600, 11), bit_shl(s % 3600 / 60, 5)), s % 60 / 2)
+    bit_or(bit_shl(day, 16), tod)
+  }
+
+# ---- Records ----------------------------------------------------
+
+# What the central directory repeats about an entry already written.
+type Written = {
+  name: Array[Byte], flags: Int, method: Int, stamp: Int,
+  crc: Int, csize: Int, usize: Int, offset: Int
+}
+
+fn u32_max() : Int = 0xFFFFFFFF
+
+fn is_ascii(b: Array[Byte], i: Int) : Bool =
+  if i >= array_length(b) { true } else if bytes_get_le(b, i, 1) >= 128 { false } else { is_ascii(b, i + 1) }
+
+fn version_needed(method: Int) : Int = if method == 8 { 20 } else { 10 }
+
+fn local_header(out: bytebuf.ByteBuf, w: Written) : bytebuf.ByteBuf = {
+  let a = bytebuf.push_le(bytebuf.push_le(out, 0x04034b50, 4), version_needed(w.method), 2)
+  let b = bytebuf.push_le(bytebuf.push_le(bytebuf.push_le(a, w.flags, 2), w.method, 2), w.stamp, 4)
+  let c = bytebuf.push_le(bytebuf.push_le(bytebuf.push_le(b, w.crc, 4), w.csize, 4), w.usize, 4)
+  bytebuf.push_bytes(bytebuf.push_le(bytebuf.push_le(c, array_length(w.name), 2), 0, 2), w.name)
+}
+
+# Made by version 2.0 on Unix, so readers take the high half of the external attributes as a mode.
+fn central_header(out: bytebuf.ByteBuf, w: Written) : bytebuf.ByteBuf = {
+  let a = bytebuf.push_le(bytebuf.push_le(bytebuf.push_le(out, 0x02014b50, 4), 0x0314, 2), version_needed(w.method), 2)
+  let b = bytebuf.push_le(bytebuf.push_le(bytebuf.push_le(a, w.flags, 2), w.method, 2), w.stamp, 4)
+  let c = bytebuf.push_le(bytebuf.push_le(bytebuf.push_le(b, w.crc, 4), w.csize, 4), w.usize, 4)
+  let d = bytebuf.push_le(bytebuf.push_le(bytebuf.push_le(c, array_length(w.name), 2), 0, 2), 0, 2)
+  let e = bytebuf.push_le(bytebuf.push_le(bytebuf.push_le(d, 0, 2), 0, 2), bit_shl(0x81A4, 16), 4)
+  bytebuf.push_bytes(bytebuf.push_le(e, w.offset, 4), w.name)
+}
+
+fn end_record(out: bytebuf.ByteBuf, count: Int, cd_size: Int, cd_offset: Int) : bytebuf.ByteBuf = {
+  let a = bytebuf.push_le(bytebuf.push_le(bytebuf.push_le(out, 0x06054b50, 4), 0, 2), 0, 2)
+  let b = bytebuf.push_le(bytebuf.push_le(bytebuf.push_le(a, count, 2), count, 2), cd_size, 4)
+  bytebuf.push_le(bytebuf.push_le(b, cd_offset, 4), 0, 2)
+}
+
+# ---- Writing ----------------------------------------------------
+
+fn check_path(p: String) : Result[Unit, String] =
+  if string_length(p) == 0 { Err("zip: an entry has an empty path") }
+  else if string_length(p) > 65535 { Err("zip: path longer than 65535 bytes: #{string_slice(p, 0, 64)}…") }
+  else if string_byte_at_int(p, 0) == 47 { Err("zip: absolute path #{p}") }
+  else { Ok(()) }
+
+fn compressed(e: Entry) : Pair[Int, Array[Byte]] = match e.method {
+  Stored   -> (0, e.data)
+  Deflated -> {
+    let z = deflate.compress(e.data)
+    if array_length(z) < array_length(e.data) { (8, z) } else { (0, e.data) }
+  }
+}
+
+fn written(e: Entry, offset: Int) : Result[Pair[Written, Array[Byte]], String] = {
+  check_path(e.path)!
+  let name = bytebuf.of_string(e.path)
+  let body = compressed(e)
+  let w = Written {
+    name: name, flags: if is_ascii(name, 0) { 0 } else { 0x0800 }, method: body.fst,
+    stamp: dos_datetime(e.modified), crc: crc32.crc32(e.data),
+    csize: array_length(body.snd), usize: array_length(e.data), offset: offset
+  }
+  if w.usize > u32_max() or w.csize > u32_max() or offset > u32_max() { Err("zip: #{e.path} needs Zip64") }
+  else { Ok((w, body.snd)) }
+}
+
+fn entries_loop(es: [Entry], out: bytebuf.ByteBuf, acc: [Written]) : Result[Pair[bytebuf.ByteBuf, [Written]], String] =
+  match es {
+    []        -> Ok((out, list_reverse(acc)))
+    [e, ...t] -> {
+      let r = written(e, bytebuf.length(out))!
+      entries_loop(t, bytebuf.push_bytes(local_header(out, r.fst), r.snd), [r.fst, ...acc])
+    }
+  }
+
+fn central_loop(ws: [Written], out: bytebuf.ByteBuf) : bytebuf.ByteBuf = match ws {
+  []        -> out
+  [w, ...t] -> central_loop(t, central_header(out, w))
+}
+
+#[doc("The bytes of a zip archive holding `entries` in order, or why it cannot be written.")]
+pub fn archive(entries: [Entry]) : Result[Array[Byte], String] = {
+  let count = list_length(entries)
+  if count > 65535 { Err("zip: #{count} entries need Zip64") } else {
+    let body = entries_loop(entries, bytebuf.new(4096), [])!
+    let cd_offset = bytebuf.length(body.fst)
+    let with_cd = central_loop(body.snd, body.fst)
+    let cd_size = bytebuf.length(with_cd) - cd_offset
+    if cd_offset > u32_max() { Err("zip: archive needs Zip64") }
+    else { Ok(bytebuf.to_array(end_record(with_cd, count, cd_size, cd_offset))) }
+  }
+}
+
+#[doc("Writes the archive of `entries` to `path`, replacing any file there.")]
+pub fn write_file(path: String, entries: [Entry]) : Result[Unit, String] / File =
+  match archive(entries) {
+    Ok(bytes) -> file.write_bytes(path, bytes)
+    Err(e)    -> Err(e)
+  }

@@ -1,0 +1,190 @@
+#[doc("""
+Length-limited canonical Huffman codes, as DEFLATE writes them.
+
+`lengths` turns symbol frequencies into code lengths no longer than a
+limit: Moffat and Katajainen's in-place construction over the sorted
+frequencies, then a Kraft repair that moves overlong codes up to the
+limit. Every code it returns is complete: fewer than two used symbols
+are padded with zero-frequency neighbours, so a decoder never meets a
+lone code. `codes` assigns the canonical codes, bit-reversed so that a
+least-significant-bit-first writer can emit them directly.
+""")]
+
+fn imin(a: Int, b: Int) : Int = if a < b { a } else { b }
+
+fn used_symbols(freq: Vec[Int], off: Int, i: Int, acc: [Pair[Int, Int]]) : [Pair[Int, Int]] =
+  if i < 0 { acc } else {
+    let f = vec_get(freq, off + i)
+    used_symbols(freq, off, i - 1, if f > 0 { [(f, i), ...acc] } else { acc })
+  }
+
+fn padded(used: [Pair[Int, Int]]) : [Pair[Int, Int]] = match used {
+  []  -> [(1, 0), (1, 1)]
+  [p] -> if p.snd == 0 { [p, (1, 1)] } else { [(1, 0), p] }
+  _   -> used
+}
+
+fn by_freq(a: Pair[Int, Int], b: Pair[Int, Int]) : Int =
+  if a.fst != b.fst { a.fst - b.fst } else { a.snd - b.snd }
+
+fn fill_sorted(xs: [Pair[Int, Int]], a: Array[Int], syms: Array[Int], i: Int) : Unit / Mutable = match xs {
+  []        -> ()
+  [p, ...t] -> {
+    a[i] := p.fst
+    syms[i] := p.snd
+    fill_sorted(t, a, syms, i + 1)
+  }
+}
+
+fn first_child(a: Array[Int], n: Int, next: Int, root: Int, leaf: Int) : Pair[Int, Int] / Mutable =
+  if leaf >= n or a[root] < a[leaf] {
+    a[next] := a[root]
+    a[root] := next
+    (root + 1, leaf)
+  } else {
+    a[next] := a[leaf]
+    (root, leaf + 1)
+  }
+
+fn second_child(a: Array[Int], n: Int, next: Int, root: Int, leaf: Int) : Pair[Int, Int] / Mutable =
+  if leaf >= n or (root < next and a[root] < a[leaf]) {
+    a[next] := a[next] + a[root]
+    a[root] := next
+    (root + 1, leaf)
+  } else {
+    a[next] := a[next] + a[leaf]
+    (root, leaf + 1)
+  }
+
+fn build_tree(a: Array[Int], n: Int, next: Int, root: Int, leaf: Int) : Unit / Mutable =
+  if next < n - 1 {
+    let p = first_child(a, n, next, root, leaf)
+    let q = second_child(a, n, next, p.fst, p.snd)
+    build_tree(a, n, next + 1, q.fst, q.snd)
+  }
+
+fn parent_depths(a: Array[Int], next: Int) : Unit / Mutable =
+  if next >= 0 {
+    a[next] := a[a[next]] + 1
+    parent_depths(a, next - 1)
+  }
+
+fn count_internal(a: Array[Int], root: Int, depth: Int, used: Int) : Pair[Int, Int] =
+  if root >= 0 and a[root] == depth { count_internal(a, root - 1, depth, used + 1) }
+  else { (used, root) }
+
+fn fill_leaves(a: Array[Int], next: Int, count: Int, depth: Int) : Int / Mutable =
+  if count <= 0 { next } else {
+    a[next] := depth
+    fill_leaves(a, next - 1, count - 1, depth)
+  }
+
+fn leaf_depths(a: Array[Int], avail: Int, depth: Int, root: Int, next: Int) : Unit / Mutable =
+  if avail > 0 {
+    let c = count_internal(a, root, depth, 0)
+    let next2 = fill_leaves(a, next, avail - c.fst, depth)
+    leaf_depths(a, 2 * c.fst, depth + 1, c.snd, next2)
+  }
+
+# On return a[k] is the code length of the k-th symbol in ascending frequency.
+fn minimum_redundancy(a: Array[Int], n: Int) : Unit / Mutable = {
+  a[0] := a[0] + a[1]
+  build_tree(a, n, 1, 0, 2)
+  a[n - 2] := 0
+  parent_depths(a, n - 3)
+  leaf_depths(a, 1, 0, n - 2, n - 1)
+}
+
+fn count_lengths(a: Array[Int], n: Int, limit: Int, num: Array[Int], i: Int) : Unit / Mutable =
+  if i < n {
+    let l = imin(a[i], limit)
+    num[l] := num[l] + 1
+    count_lengths(a, n, limit, num, i + 1)
+  }
+
+fn kraft(num: Array[Int], limit: Int, i: Int, acc: Int) : Int =
+  if i > limit { acc } else { kraft(num, limit, i + 1, acc + bit_shl(num[i], limit - i)) }
+
+fn split_shorter(num: Array[Int], i: Int) : Unit / Mutable =
+  if i > 0 {
+    if num[i] != 0 {
+      num[i] := num[i] - 1
+      num[i + 1] := num[i + 1] + 2
+    } else {
+      split_shorter(num, i - 1)
+    }
+  }
+
+fn repair(num: Array[Int], limit: Int, total: Int) : Unit / Mutable =
+  if total > bit_shl(1, limit) {
+    num[limit] := num[limit] - 1
+    split_shorter(num, limit - 1)
+    repair(num, limit, total - 1)
+  }
+
+fn assign(lens: Array[Int], syms: Array[Int], num: Array[Int], len: Int, left: Int, pos: Int) : Unit / Mutable =
+  if len > 0 {
+    if left == 0 {
+      assign(lens, syms, num, len - 1, num[len - 1], pos)
+    } else {
+      lens[syms[pos]] := len
+      assign(lens, syms, num, len, left - 1, pos + 1)
+    }
+  }
+
+fn to_vec(a: Array[Int], i: Int, v: Vec[Int]) : Vec[Int] =
+  if i >= array_length(a) { v } else { to_vec(a, i + 1, vec_push(v, a[i])) }
+
+#[doc("Code lengths for the `nsym` symbols whose frequencies start at `off` in `freq`, none longer than `limit` bits.")]
+pub fn lengths(freq: Vec[Int], off: Int, nsym: Int, limit: Int) : Vec[Int] = {
+  let used = padded(used_symbols(freq, off, nsym - 1, [])) |> sort_by(by_freq)
+  let n = list_length(used)
+  let a = array_make(n, 0)
+  let syms = array_make(n, 0)
+  fill_sorted(used, a, syms, 0)
+  minimum_redundancy(a, n)
+  let num = array_make(34, 0)
+  count_lengths(a, n, limit, num, 0)
+  repair(num, limit, kraft(num, limit, 1, 0))
+  let lens = array_make(nsym, 0)
+  num[0] := 0
+  assign(lens, syms, num, limit, num[limit], 0)
+  to_vec(lens, 0, vec_reserve(nsym))
+}
+
+fn reverse_bits(v: Int, len: Int, acc: Int) : Int =
+  if len == 0 { acc } else { reverse_bits(bit_ushr(v, 1), len - 1, bit_or(bit_shl(acc, 1), bit_and(v, 1))) }
+
+fn tally(lens: Vec[Int], i: Int, bl: Array[Int]) : Unit / Mutable =
+  if i < vec_length(lens) {
+    let l = vec_get(lens, i)
+    bl[l] := bl[l] + 1
+    tally(lens, i + 1, bl)
+  }
+
+fn first_codes(bl: Array[Int], next: Array[Int], bits: Int, code: Int) : Unit / Mutable =
+  if bits < 16 {
+    let c = bit_shl(code + bl[bits - 1], 1)
+    next[bits] := c
+    first_codes(bl, next, bits + 1, c)
+  }
+
+fn place(lens: Vec[Int], next: Array[Int], i: Int, out: Vec[Int]) : Vec[Int] / Mutable =
+  if i >= vec_length(lens) { out } else {
+    let l = vec_get(lens, i)
+    if l == 0 { place(lens, next, i + 1, vec_push(out, 0)) } else {
+      let c = next[l]
+      next[l] := c + 1
+      place(lens, next, i + 1, vec_push(out, reverse_bits(c, l, 0)))
+    }
+  }
+
+#[doc("The canonical code of each symbol, bit-reversed for an LSB-first writer; unused symbols get 0.")]
+pub fn codes(lens: Vec[Int]) : Vec[Int] = {
+  let bl = array_make(16, 0)
+  tally(lens, 0, bl)
+  bl[0] := 0
+  let next = array_make(16, 0)
+  first_codes(bl, next, 1, 0)
+  place(lens, next, 0, vec_reserve(vec_length(lens)))
+}

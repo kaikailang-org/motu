@@ -1,0 +1,70 @@
+#[doc("""
+CRC-32 as IEEE 802.3, zip, gzip and PNG compute it (reflected polynomial
+0xEDB88320, initial value and final xor 0xFFFFFFFF).
+
+`crc32` checks a whole array; `start`, `update` and `finish` check a
+stream in pieces and agree with `crc32` over the concatenation. The
+inner loop consumes eight bytes per step through eight derived tables.
+""")]
+
+#[doc("A running CRC-32: its lookup tables and the register so far.")]
+pub type Crc32 = { priv table: Vec[Int], priv reg: Int }
+
+fn mask32() : Int = 0xFFFFFFFF
+
+fn shift_bit(c: Int, k: Int) : Int =
+  if k == 0 { c } else {
+    let s = bit_ushr(c, 1)
+    shift_bit(if bit_and(c, 1) == 1 { bit_xor(s, 0xEDB88320) } else { s }, k - 1)
+  }
+
+fn base_rows(i: Int, t: Vec[Int]) : Vec[Int] =
+  if i == 256 { t } else { base_rows(i + 1, vec_push(t, shift_bit(i, 8))) }
+
+fn derived_rows(i: Int, t: Vec[Int]) : Vec[Int] =
+  if i == 2048 { t } else {
+    let prev = vec_get(t, i - 256)
+    derived_rows(i + 1, vec_push(t, bit_xor(bit_ushr(prev, 8), vec_get(t, bit_and(prev, 255)))))
+  }
+
+#[doc("The eight 256-entry slicing tables, row `k` at offset `256 * k`.")]
+pub fn tables() : Vec[Int] = derived_rows(256, base_rows(0, vec_reserve(2048)))
+
+#[doc("A fresh running CRC-32.")]
+pub fn start() : Crc32 = Crc32 { table: tables(), reg: mask32() }
+
+fn row(t: Vec[Int], k: Int, x: Int) : Int = vec_get(t, k * 256 + bit_and(x, 255))
+
+fn step8(t: Vec[Int], c: Int, w: Int) : Int = {
+  let lo = bit_xor(bit_and(w, mask32()), c)
+  let hi = bit_and(bit_ushr(w, 32), mask32())
+  let a = bit_xor(row(t, 7, lo), row(t, 6, bit_ushr(lo, 8)))
+  let b = bit_xor(row(t, 5, bit_ushr(lo, 16)), row(t, 4, bit_ushr(lo, 24)))
+  let d = bit_xor(row(t, 3, hi), row(t, 2, bit_ushr(hi, 8)))
+  let e = bit_xor(row(t, 1, bit_ushr(hi, 16)), row(t, 0, bit_ushr(hi, 24)))
+  bit_xor(bit_xor(a, b), bit_xor(d, e))
+}
+
+fn step1(t: Vec[Int], c: Int, x: Int) : Int =
+  bit_xor(row(t, 0, bit_xor(c, x)), bit_ushr(c, 8))
+
+fn tail_loop(t: Vec[Int], b: Array[Byte], i: Int, stop: Int, c: Int) : Int =
+  if i >= stop { c } else { tail_loop(t, b, i + 1, stop, step1(t, c, bytes_get_le(b, i, 1))) }
+
+fn word_loop(t: Vec[Int], b: Array[Byte], i: Int, stop: Int, c: Int) : Int =
+  if i + 8 > stop { tail_loop(t, b, i, stop, c) }
+  else { word_loop(t, b, i + 8, stop, step8(t, c, bytes_get_le(b, i, 8))) }
+
+#[doc("Feeds `n` bytes of `b` starting at `off`.")]
+pub fn update(c: Crc32, b: Array[Byte], off: Int, n: Int) : Crc32 =
+  Crc32 { table: c.table, reg: word_loop(c.table, b, off, off + n, c.reg) }
+
+#[doc("The checksum of everything fed so far, as an unsigned 32-bit value.")]
+pub fn finish(c: Crc32) : Int = bit_xor(c.reg, mask32())
+
+#[doc("The CRC-32 of every byte of `b`, as an unsigned 32-bit value.")]
+pub fn crc32(b: Array[Byte]) : Int = finish(update(start(), b, 0, array_length(b)))
+
+#[doc("The CRC-32 of the UTF-8 bytes of `s`.")]
+pub fn crc32_string(s: String) : Int =
+  crc32(bytes_put_string(array_make(string_length(s), bin_byte(0)), 0, s))
