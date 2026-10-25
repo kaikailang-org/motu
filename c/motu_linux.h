@@ -49,6 +49,7 @@ typedef void (*AsyncDone)(void *source, void *result, void *ud);
   X(void *, g_variant_new_string, (const char *)) \
   X(void, g_variant_unref, (void *)) \
   X(void *, g_object_new, (GType, const char *, ...)) \
+  X(void *, g_object_ref, (void *)) \
   X(void, g_object_unref, (void *)) \
   X(unsigned long, g_signal_connect_data, (void *, const char *, GCallback, void *, void *, int)) \
   X(void *, g_value_get_boxed, (const void *)) \
@@ -148,6 +149,7 @@ typedef void (*AsyncDone)(void *source, void *result, void *ud);
   X(int, gtk_printer_accepts_pdf, (void *)) \
   X(GType, webkit_web_view_get_type, (void)) \
   X(void *, webkit_web_context_get_default, (void)) \
+  X(void *, webkit_network_session_get_default, (void)) \
   X(void, webkit_web_context_register_uri_scheme, (void *, const char *, void (*)(void *, void *), void *, void (*)(void *))) \
   X(void *, webkit_web_context_get_security_manager, (void *)) \
   X(void, webkit_security_manager_register_uri_scheme_as_secure, (void *, const char *)) \

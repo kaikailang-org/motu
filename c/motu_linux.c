@@ -776,6 +776,11 @@ static void *ui_main(void *arg) {
   void *security = webkit_web_context_get_security_manager(ctx);
   webkit_security_manager_register_uri_scheme_as_secure(security, "motu");
   webkit_security_manager_register_uri_scheme_as_cors_enabled(security, "motu");
+  /* Exit handlers release WebKit's default context and network session on the
+   * thread that calls exit; finalized off this thread they abort. Once the last
+   * window is gone nothing else holds them, so the shim keeps them for good. */
+  g_object_ref(ctx);
+  g_object_ref(webkit_network_session_get_default());
   sync_done(arg, 1);
   g_main_loop_run(g_loop);
   lx_deliver(CB_STOP, 0, 0, 0);
