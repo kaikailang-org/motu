@@ -314,4 +314,33 @@ void motu_print_pdf(void *reply, const char *html, const char *base_url, const c
   lx_on_ui(lx_job(print_main, reply, 0, 0, html, base_url, out_path));
 }
 
+/* --- snapshot --- */
+
+typedef struct { void *reply; char *out; } ShotJob;
+
+static void on_snapshot(void *view, void *res, void *ud) {
+  ShotJob *job = ud;
+  GError *err = 0;
+  void *texture = webkit_web_view_get_snapshot_finish(view, res, &err);
+  lx_clear_error(&err);
+  int ok = texture && gdk_texture_save_to_png(texture, job->out);
+  if (texture) g_object_unref(texture);
+  lx_deliver(CB_REPLY, job->reply, 0, ok ? "true" : "false");
+  free(job->out);
+  free(job);
+}
+
+static void snapshot_main(Job *j) {
+  void *view = lx_view_of(j->a);
+  if (!view) { lx_deliver(CB_REPLY, j->p, 0, "false"); return; }
+  ShotJob *job = calloc(1, sizeof *job);
+  job->reply = j->p;
+  job->out = strdup(j->s[0]);
+  webkit_web_view_get_snapshot(view, 0, 0, 0, on_snapshot, job);
+}
+
+void motu_snapshot(void *reply, int64_t win, const char *out_path) {
+  lx_on_ui(lx_job(snapshot_main, reply, win, 0, out_path, 0, 0));
+}
+
 #endif

@@ -763,6 +763,7 @@ void motu_post(int64_t win, const char *json) {
 }
 
 void *lx_parent_of(int64_t win) { return valid(win) ? g_win[win].window : 0; }
+void *lx_view_of(int64_t win) { return valid(win) ? g_win[win].view : 0; }
 
 /* --- application --- */
 

@@ -175,7 +175,10 @@ typedef void (*AsyncDone)(void *source, void *result, void *ud);
   X(void, webkit_settings_set_enable_developer_extras, (void *, int)) \
   X(void *, webkit_print_operation_new, (void *)) \
   X(void, webkit_print_operation_set_print_settings, (void *, void *)) \
-  X(void, webkit_print_operation_print, (void *))
+  X(void, webkit_print_operation_print, (void *)) \
+  X(void, webkit_web_view_get_snapshot, (void *, int, int, void *, AsyncDone, void *)) \
+  X(void *, webkit_web_view_get_snapshot_finish, (void *, void *, GError **)) \
+  X(int, gdk_texture_save_to_png, (void *, const char *))
 
 #define HIDDEN __attribute__((visibility("hidden")))
 #define DECLARE(ret, name, params) extern HIDDEN ret (*name) params;
@@ -208,6 +211,7 @@ HIDDEN char *lx_paths_json(void *file, void *files);
 HIDDEN void lx_reply_owned(void *reply, char *json);
 HIDDEN void lx_clear_error(GError **err);
 HIDDEN void *lx_parent_of(int64_t win);
+HIDDEN void *lx_view_of(int64_t win);
 HIDDEN void *lx_new_web_view(void *ucm);
 
 #endif
