@@ -392,12 +392,12 @@ can own the state behind it.
 Each missing kaikai piece becomes an issue in `lnds/kaikai` when its
 milestone starts.
 
-## Decisions for the owner
+## Decisions taken by the owner
 
-Items 1 to 4 were applied with the recommended option while stage 1 was built
-(own shim; HTML/CSS/JavaScript pages; CodeMirror 6; GTK 4 with WebKitGTK
-6.0) and stay open to change. Item 5: the owner named the application
-"Book".
+All five are decided: the owner confirmed the recommended option for items 1
+to 4 (own shim; HTML/CSS/JavaScript pages; CodeMirror 6; GTK 4 with
+WebKitGTK 6.0) and named the application "Book". The options as they were
+weighed:
 
 
 1. **Shim**: Motu's own per-platform shim (recommended, for the reasons
