@@ -18,7 +18,7 @@ jobs:
       - name: Install GTK 4, WebKitGTK 6.0 and Xvfb
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends libgtk-4-1 libwebkitgtk-6.0-4 xvfb
+          sudo apt-get install -y -q --no-install-recommends libgtk-4-1 libwebkitgtk-6.0-4 xvfb hunspell-en-us
 
       - name: Install kai
         run: |
@@ -41,6 +41,21 @@ jobs:
         run: |
           MOTU_PAGE='index.html#selftest' xvfb-run -a timeout 60 ./build/hello | tee selftest.txt
           grep -E '^Hello, selftest, from kaikai \| 2000 pings: [0-9.]+ us each \| error path: unknown command nope \| slow: cancelled after [0-9]+ ms$' selftest.txt
+
+      - name: Spelling marks misspelled words
+        run: |
+          MOTU_PAGE="index.html#spell=$RUNNER_TEMP/spell.png" xvfb-run -a timeout 60 ./build/hello
+          python3 tools/count-red.py "$RUNNER_TEMP/spell.png"
+
+      - name: A kaikai page in WebKitGTK
+        run: |
+          D=$RUNNER_TEMP/wasm
+          mkdir -p "$D/out" "$D/examples/hello"
+          for p in plain fibers; do kai build --target=wasm32-browser tests/wasm-page/$p.kai -o "$D/out/$p"; done
+          cp tests/wasm-page/probe.html "$D/out/probe.html"; cp tests/wasm-page/probe.html "$D/out/index.html"
+          ln -s "$D/out" "$D/examples/hello/assets"; cp build/hello "$D/hello"
+          for p in plain fibers; do MOTU_PAGE="probe.html#$p" xvfb-run -a timeout 60 "$D/hello" | tee -a wasm.txt; done
+          grep -F 'plain: out="plain: 7.14159" | errors=[]' wasm.txt
 
       - name: Unit tests
         run: for t in tests/*_test.kai; do kai test "$t" | tail -1; done

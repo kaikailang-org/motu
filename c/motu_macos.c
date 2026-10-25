@@ -616,6 +616,10 @@ void motu_init(void *ud, const char *app_name) {
   dlopen("/System/Library/Frameworks/WebKit.framework/WebKit", RTLD_LAZY | RTLD_GLOBAL);
   g_app = MSG(id)(CLS("NSApplication"), SEL_("sharedApplication"));
   MSG(BOOL, long)(g_app, SEL_("setActivationPolicy:"), 0L); /* Regular */
+  /* WebKit checks spelling only when this default is on; registering it keeps the user's own choice. */
+  id spelling = MSG(id, id, id)(CLS("NSDictionary"), SEL_("dictionaryWithObject:forKey:"),
+      MSG(id, BOOL)(CLS("NSNumber"), SEL_("numberWithBool:"), YES), nsstr("WebContinuousSpellCheckingEnabled"));
+  MSG(void, id)(MSG(id)(CLS("NSUserDefaults"), SEL_("standardUserDefaults")), SEL_("registerDefaults:"), spelling);
 
   Class c = make_class("MotuMessageHandler", "NSObject", "WKScriptMessageHandler");
   class_addMethod(c, SEL_("userContentController:didReceiveScriptMessage:"), (IMP)on_script_message, "v@:@@");

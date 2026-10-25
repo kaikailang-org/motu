@@ -1,0 +1,11 @@
+type Shape = Circle(Real) | Square(Real)
+
+fn area(s: Shape) : Real = match s {
+  Circle(r) -> 3.14159 * r * r
+  Square(a) -> a * a
+}
+
+fn main() : Unit / Stdout = {
+  let total = [Circle(1.0), Square(2.0)] | area |> list.foldl(0.0, (a, b) => a + b)
+  println("plain: #{total}")
+}

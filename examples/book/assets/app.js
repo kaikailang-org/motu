@@ -612,7 +612,7 @@ async function shots(arg) {
   await openProject(() => motu.invoke('open', { path }));
   const shot = async (name) => { await pause(); await motu.invoke('motu.snapshot', { out: `${dir}/${name}.png` }); };
   S.expanded.add('p1'); S.expanded.add('p2');
-  await select('c1'); await shot('editor');
+  await select('c1'); S.editors?.[0]?.focus?.(); document.querySelector('.cm-content')?.focus(); document.execCommand('insertText', false, 'I recieve teh lettter. '); await new Promise((r) => setTimeout(r, 1500)); await shot('editor');
   S.view = 'corkboard'; syncViewButtons(); await select('p1'); await shot('corkboard');
   S.view = 'outliner'; syncViewButtons(); await select(MANUSCRIPT); await shot('outliner');
   S.view = 'editor'; syncViewButtons(); S.split = 'c2'; await select('c1'); await shot('split');

@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<pre id="kai-stdout"></pre>
+<script>
+  const name = location.hash.slice(1);
+  const errors = [];
+  addEventListener('error', (e) => errors.push(e.message));
+  addEventListener('unhandledrejection', (e) => errors.push(String(e.reason)));
+  const ua = navigator.userAgent.match(/Version\/[\d.]+|AppleWebKit\/[\d.]+/g)?.join(' ');
+  const jspi = typeof WebAssembly.Suspending === 'function';
+  const exn = typeof WebAssembly.Exception === 'function' && typeof WebAssembly.Tag === 'function';
+  import(`./${name}.mjs`).catch((e) => errors.push('import: ' + e));
+  setTimeout(() => motu.invoke('motu.report',
+    `${name}: out=${JSON.stringify(document.getElementById('kai-stdout').textContent.trim())} | errors=${JSON.stringify(errors)} | jspi=${jspi} exn=${exn} | ${ua}`), 1500);
+</script>

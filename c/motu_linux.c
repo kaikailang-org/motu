@@ -767,6 +767,23 @@ void *lx_view_of(int64_t win) { return valid(win) ? g_win[win].view : 0; }
 
 /* --- application --- */
 
+/* WebKitGTK checks spelling only when asked, in the languages it is given: the
+ * user's locale names without the encoding ("en_US.UTF-8" becomes "en_US"). */
+static void enable_spelling(void *ctx) {
+  static char langs[4][32];
+  const char *list[5] = {0};
+  int n = 0;
+  for (const char *const *names = g_get_language_names(); *names && n < 4; names++) {
+    if (strchr(*names, '.') || strchr(*names, '@') || !strcmp(*names, "C") || !strcmp(*names, "POSIX")) continue;
+    snprintf(langs[n], sizeof langs[n], "%s", *names);
+    list[n] = langs[n];
+    n++;
+  }
+  if (n == 0) list[n++] = "en_US";
+  webkit_web_context_set_spell_checking_languages(ctx, list);
+  webkit_web_context_set_spell_checking_enabled(ctx, 1);
+}
+
 static void *ui_main(void *arg) {
   g_ui_thread = pthread_self();
   if (!gtk_init_check()) { sync_done(arg, 0); return 0; }
@@ -776,6 +793,7 @@ static void *ui_main(void *arg) {
   void *security = webkit_web_context_get_security_manager(ctx);
   webkit_security_manager_register_uri_scheme_as_secure(security, "motu");
   webkit_security_manager_register_uri_scheme_as_cors_enabled(security, "motu");
+  enable_spelling(ctx);
   /* Exit handlers release WebKit's default context and network session on the
    * thread that calls exit; finalized off this thread they abort. Once the last
    * window is gone nothing else holds them, so the shim keeps them for good. */

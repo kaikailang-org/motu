@@ -1,0 +1,10 @@
+import spawn
+
+fn main() : Int / Spawn + Stdout = {
+  let r = nursery { n ->
+    let f = n.spawn(() => 21 * 2)
+    n.await(f)
+  }
+  println("fibers: #{r}")
+  0
+}

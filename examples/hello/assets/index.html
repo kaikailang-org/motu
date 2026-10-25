@@ -25,6 +25,17 @@
       document.getElementById('out').textContent = 'error: ' + e.message;
     }
   };
+  if (location.hash.startsWith('#spell=')) (async () => {
+    const box = document.createElement('div');
+    box.contentEditable = 'true'; box.spellcheck = true;
+    box.style.cssText = 'font: 28px Georgia, serif; padding: 1rem; min-height: 3rem';
+    document.body.replaceChildren(box);
+    box.focus();
+    document.execCommand('insertText', false, 'I recieve teh lettter tommorow. ');
+    await new Promise((r) => setTimeout(r, 2000));
+    const ok = await motu.invoke('motu.snapshot', { out: decodeURIComponent(location.hash.slice(7)) });
+    await motu.invoke('motu.report', `spell snapshot: ${ok}`);
+  })();
   if (location.hash === '#ready') new PerformanceObserver((list) => {
     const fcp = list.getEntries().find((e) => e.name === 'first-contentful-paint');
     if (fcp) motu.invoke('motu.report', `first paint ${fcp.startTime.toFixed(0)} ms after the page started`);
