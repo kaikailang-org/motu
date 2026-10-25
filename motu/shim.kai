@@ -45,3 +45,30 @@ extern "C" pub fn motu_data_dir() : String / Ffi
 extern "C" pub fn motu_exe_dir() : String / Ffi
 extern "C" pub fn motu_snapshot(reply: Userdata, win: Int, out_path: String) : Unit / Ffi
 extern "C" pub fn motu_print_pdf(reply: Userdata, html: String, base_url: String, out_path: String) : Unit / Ffi
+
+# The callbacks the shim calls; each hands its event to the dispatcher's mailbox.
+
+extern "C" pub fn motu_on_message(ud: Userdata, win: Int, json: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, PageMessage(win, json))
+}
+
+extern "C" pub fn motu_on_window_event(ud: Userdata, win: Int, kind: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, WindowEvent(win, kind))
+}
+
+extern "C" pub fn motu_on_menu(ud: Userdata, id: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, MenuChosen(id))
+}
+
+extern "C" pub fn motu_on_drop(ud: Userdata, win: Int, paths: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, Dropped(win, paths))
+}
+
+extern "C" pub fn motu_on_reply(ud: Userdata, json: String) : Unit = {
+  let pid: Pid[String] = take_userdata(ud)
+  mailbox_send(pid, json)
+}

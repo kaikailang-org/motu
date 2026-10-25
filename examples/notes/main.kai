@@ -86,28 +86,3 @@ fn main() : Int / Spawn + Ffi + File + Stdout + Env = {
   }
   app.run(cfg, c => command(c), ev => app.default_event(ev))
 }
-
-extern "C" fn motu_on_message(ud: Userdata, win: Int, json: String) : Unit = {
-  let pid: Pid[Incoming] = take_userdata(ud)
-  mailbox_send(pid, PageMessage(win, json))
-}
-
-extern "C" fn motu_on_window_event(ud: Userdata, win: Int, kind: String) : Unit = {
-  let pid: Pid[Incoming] = take_userdata(ud)
-  mailbox_send(pid, WindowEvent(win, kind))
-}
-
-extern "C" fn motu_on_menu(ud: Userdata, id: String) : Unit = {
-  let pid: Pid[Incoming] = take_userdata(ud)
-  mailbox_send(pid, MenuChosen(id))
-}
-
-extern "C" fn motu_on_drop(ud: Userdata, win: Int, paths: String) : Unit = {
-  let pid: Pid[Incoming] = take_userdata(ud)
-  mailbox_send(pid, Dropped(win, paths))
-}
-
-extern "C" fn motu_on_reply(ud: Userdata, json: String) : Unit = {
-  let pid: Pid[String] = take_userdata(ud)
-  mailbox_send(pid, json)
-}
