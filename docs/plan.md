@@ -396,8 +396,8 @@ milestone starts.
 
 Items 1 to 4 were applied with the recommended option while stage 1 was built
 (own shim; HTML/CSS/JavaScript pages; CodeMirror 6; GTK 4 with WebKitGTK
-6.0) and stay open to change. Item 5 is the owner's: the application runs as
-"Book" until it has a name.
+6.0) and stay open to change. Item 5: the owner named the application
+"Book".
 
 
 1. **Shim**: Motu's own per-platform shim (recommended, for the reasons
