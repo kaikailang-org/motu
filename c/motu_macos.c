@@ -197,8 +197,10 @@ static const char *mime_of(const char *path) {
 
 static void scheme_respond(id task, id url, long code, const char *mime, id data) {
   /* The page (motu://app) may fetch from motu://files, another origin. */
-  id headers = MSG(id, id, id, id)(CLS("NSDictionary"), SEL_("dictionaryWithObjectsAndKeys:"),
-      nsstr(mime), nsstr("Content-Type"), nsstr("motu://app"), nsstr("Access-Control-Allow-Origin"), (id)0);
+  id values[2] = {nsstr(mime), nsstr("motu://app")};
+  id keys[2] = {nsstr("Content-Type"), nsstr("Access-Control-Allow-Origin")};
+  id headers = MSG(id, id *, id *, unsigned long)(CLS("NSDictionary"), SEL_("dictionaryWithObjects:forKeys:count:"),
+      values, keys, 2UL);
   id resp = MSG(id, id, long, id, id)(MSG(id)(CLS("NSHTTPURLResponse"), SEL_("alloc")),
       SEL_("initWithURL:statusCode:HTTPVersion:headerFields:"), url, code, nsstr("HTTP/1.1"), headers);
   MSG(void, id)(task, SEL_("didReceiveResponse:"), resp);
