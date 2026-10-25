@@ -21,7 +21,8 @@ What sets it apart:
   other.
 
 Stage 1 targets macOS and Linux, and is done when a Scrivener-class
-book-writing application (`examples/book`) runs on both from one source tree.
+book-writing application (`examples/book`), whose documents are Markdown
+files, runs on both from one source tree.
 
 The name is Rapa Nui: the *motu* are the islets off the island's southwest
 cape, where the manutara nested. Manutara is kaikai's web framework; on the

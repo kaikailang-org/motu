@@ -122,9 +122,9 @@ A writing studio for long books, modelled on Scrivener:
 
 - **Binder**: the project tree — manuscript, research, trash — with folders
   and documents, drag to reorder, rename in place.
-- **Editor**: rich text (headings, emphasis, lists, block quotes, footnotes,
-  comments), a split view, and the manuscript read as one continuous text
-  ("scrivenings").
+- **Editor**: every document is a Markdown file — headings, emphasis, lists,
+  block quotes, footnotes (`[^1]`), comments — edited with live styling, in a
+  split view, and the manuscript read as one continuous text ("scrivenings").
 - **Corkboard**: one index card per document with its synopsis, coloured by
   label.
 - **Outliner**: the tree as a table — title, synopsis, label, status, word
@@ -156,11 +156,12 @@ A writing studio for long books, modelled on Scrivener:
 | the project as a bundle of files | a documented bundle layout (below) and recent-projects list in the application data directory | `fs`, `encoding.toml` |
 | project search | full-text index over the documents, rebuilt from the files when missing | kohau SQLite with FTS5 |
 | EPUB, DOCX and backups | zip writer: stored entries and CRC-32 for EPUB, deflate for backups | kaikai stdlib (missing) |
+| compile reads the manuscript | Markdown parser to a syntax tree (CommonMark plus footnotes) | kaikai stdlib or an ecosystem package (missing) |
 | EPUB and DOCX contents | XML writer with escaping | small; in Motu or stdlib |
 | PDF | print the compiled HTML through the webview to a PDF file | shim (`createPDF` on macOS, a print operation to file on GTK) (R) |
 | spelling | the engine's spell checker on editable text | WKWebView native; enabled per context on WebKitGTK (R) |
 | images dropped on the binder | file drop on the window, delivered as paths | shim |
-| copy and paste rich text | the engine's clipboard, plus `motu.clipboard` for text from the backend | shim |
+| paste from a word processor | the engine's clipboard, plus `motu.clipboard` for text from the backend; turning pasted HTML into Markdown is the application's | shim |
 | unsaved changes on quit | quit request as an event the backend can veto | shim |
 | dark mode | `prefers-color-scheme` in the page; the system appearance as an event | engine; shim |
 | one command to start, run and ship | `motu new`, `motu dev` (rebuild and reload on save), `motu build` (`.app` bundle; AppImage and tarball) | kaikai `kai build` |
@@ -170,16 +171,35 @@ A writing studio for long books, modelled on Scrivener:
 
 ```
 My Novel.book/
-  project.toml          binder tree, labels, status list, targets, compile settings
-  docs/<uuid>.json      one document, in the editor's JSON model
-  notes/<uuid>.json     its notes
-  snapshots/<uuid>/<utc-timestamp>.json
+  project.toml          binder order, labels, status list, targets, compile settings
+  docs/<uuid>.md        one document, Markdown with TOML front matter
+  notes/<uuid>.md       its notes
+  snapshots/<uuid>/<utc-timestamp>.md
   research/<uuid>.<ext> imported images and PDFs
   index.db              search index; derived, rebuilt when absent
 ```
 
-Plain files, one per document, so a project syncs through Dropbox or git and
-survives the application. The index is a cache: deleting it loses nothing.
+```markdown
++++
+title = "The harbour"
+synopsis = "Ana arrives the night the lights fail."
+label = "draft"
+status = "first pass"
+target = 3000
++++
+
+The ferry came in after dark.[^1] …
+
+[^1]: The last ferry, not the usual one.
+```
+
+Every document is a Markdown file another editor can open, so a project syncs
+through Dropbox or git and survives the application. The front matter keeps a
+document's metadata with its text; `project.toml` holds only what spans
+documents. Files are named by a stable id, so reordering or renaming in the
+binder rewrites `project.toml` and the title, never a file name. Comments are
+written inline as `<!-- … -->`, which every Markdown renderer drops. The index
+is a cache: deleting it loses nothing.
 
 ### What stage 1 measures
 
@@ -205,8 +225,8 @@ Each figure is reported with the machine and the backend it was measured on.
    events, an autosave timer.
 4. **Project.** The `Project` effect and its confinement, atomic writes, the
    bundle, recent projects, search through kohau.
-5. **Compile.** Zip and XML writers, Markdown, HTML, EPUB 3, DOCX, and PDF
-   through the webview.
+5. **Compile.** The Markdown parser, zip and XML writers; out to Markdown,
+   HTML, EPUB 3, DOCX, and PDF through the webview.
 6. **Tooling.** `motu new`, `motu dev`, `motu build`, the macOS bundle and the
    Linux AppImage.
 7. **The application.** `examples/book` complete, and the measurements above.
@@ -228,6 +248,17 @@ and Linux answers four questions with measurements:
    (Safari 27) (R); the WebKitGTK versions of current distributions decide
    the same on Linux.
 
+## Motu and ahu
+
+Motu depends on kaikai alone: its tasks are fibers in a per-window nursery,
+its channel delivers to an actor's `Pid`. It neither requires
+[ahu](https://github.com/kaikailang-org/ahu) nor assumes it. The reference
+application's state — the open project, the autosave timer, the search
+index, the export queue — will in time rest on ahu's cells and restart
+helpers; that is the application's work and ahu's, not Motu's. What Motu owes
+it is not to stand in the way: a command forwards to any `Pid`, so a cell
+can own the state behind it.
+
 ## Stage 2 — after the application ships
 
 - Pages written in kaikai with Manutara, on the same channel; the typed
@@ -245,6 +276,7 @@ and Linux answers four questions with measurements:
 | zip writer (stored + CRC-32; deflate) | kaikai stdlib | missing |
 | flush a file to disk (`fsync`) for atomic saves | kaikai stdlib | missing |
 | XML writer | kaikai stdlib or Motu | missing |
+| Markdown parser (CommonMark plus footnotes) to a syntax tree | kaikai stdlib or an ecosystem package | missing |
 | SQLite with FTS5 | kohau | driver ships (R); FTS5 depends on the system library |
 | Windows runtime | kaikai | not started; spike numbers above |
 
@@ -258,13 +290,12 @@ milestone starts.
 2. **Stage 1 page language**: HTML/CSS/JavaScript with a generated typed
    client (recommended: it does not wait on Manutara or on JSPI in the system
    WebKit), or kaikai on wasm from the first milestone.
-3. **Editor in the reference application**: a vendored ProseMirror (MIT;
-   recommended: rich text editing is years of work on its own) or an editor
-   written for the application. This is the application's choice, not
-   Motu's: Motu ships no editor.
-4. **Document format**: the editor's JSON model as the stored form, with
-   Markdown as an export (recommended), or Markdown as the stored form, which
-   loses comments and footnote placement.
-5. **Linux stack**: GTK 4 with WebKitGTK 6.0 (recommended, current
+3. **Editor in the reference application**: a vendored CodeMirror 6 (MIT)
+   styling the Markdown as it is typed (recommended: the file stays exactly
+   as written), or a rich-text editor such as ProseMirror that parses the
+   Markdown and writes it back, which normalises the author's formatting on
+   every save. This is the application's choice, not Motu's: Motu ships no
+   editor.
+4. **Linux stack**: GTK 4 with WebKitGTK 6.0 (recommended, current
    distributions only) or GTK 3 with WebKitGTK 4.1.
-6. **Name of the reference application.**
+5. **Name of the reference application.**
