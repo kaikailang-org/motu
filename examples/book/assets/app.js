@@ -531,6 +531,7 @@ document.addEventListener('keydown', (e) => {
 
 if (location.hash.startsWith('#selftest=')) selftest(decodeURIComponent(location.hash.slice(10)));
 else if (location.hash.startsWith('#open=')) openProject(() => motu.invoke('open', { path: decodeURIComponent(location.hash.slice(6)) }));
+else if (location.hash.startsWith('#shots=')) shots(decodeURIComponent(location.hash.slice(7)));
 else showWelcome();
 
 async function selftest(dir) {
@@ -583,4 +584,21 @@ async function selftest(dir) {
     check('self-test', false, e.message);
   }
   await motu.invoke('motu.report', out.join('\n'));
+}
+
+async function shots(arg) {
+  window.onerror = (m) => motu.invoke('motu.report', `JS ERROR ${m}`);
+  window.onunhandledrejection = (e) => motu.invoke('motu.report', `REJECTED ${e.reason}`);
+  const [path, dir] = arg.split('|');
+  const pause = () => new Promise((r) => setTimeout(r, 400));
+  await openProject(() => motu.invoke('open', { path }));
+  const shot = async (name) => { await pause(); await motu.invoke('motu.snapshot', { out: `${dir}/${name}.png` }); };
+  S.expanded.add('p1'); S.expanded.add('p2');
+  await select('c1'); await shot('editor');
+  S.view = 'corkboard'; syncViewButtons(); await select('p1'); await shot('corkboard');
+  S.view = 'outliner'; syncViewButtons(); await select(MANUSCRIPT); await shot('outliner');
+  S.view = 'editor'; syncViewButtons(); S.split = 'c2'; await select('c1'); await shot('split');
+  S.split = null; document.body.classList.add('composing'); await renderMain(); await shot('composition');
+  document.body.classList.remove('composing');
+  await motu.invoke('motu.report', 'shots done');
 }

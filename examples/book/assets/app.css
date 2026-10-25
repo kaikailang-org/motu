@@ -69,6 +69,7 @@ input, select, textarea { background: var(--bg); border: 1px solid var(--line); 
 .doc + .doc { padding-top: 0; }
 .doc .doc-title { font: 600 .8rem/1 inherit; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 1.5rem 0 .5rem; border-top: 1px dashed var(--line); padding-top: 1rem; }
 .cm-editor { font: 17px/1.65 ui-serif, "Iowan Old Style", Georgia, serif; background: transparent; }
+.cm-editor .cm-scroller { font-family: inherit; line-height: inherit; }
 .cm-editor.cm-focused { outline: none; }
 .cm-content { caret-color: var(--accent); }
 .cm-activeLine { background: transparent; }
@@ -119,7 +120,7 @@ dialog pre { white-space: pre-wrap; max-height: 50vh; overflow: auto; background
 
 /* composition mode */
 body.composing #toolbar, body.composing #binder, body.composing #inspector, body.composing .pane header { display: none; }
-body.composing #body { grid-template-columns: 0 1fr 0; }
+body.composing #body { grid-template-columns: 1fr; }
 body.composing .pane { border: 0; }
 body.composing .pane + .pane { display: none; }
 body.composing #workspace { background: #141412; color: #e9e6df; }

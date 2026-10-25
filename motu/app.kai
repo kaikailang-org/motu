@@ -75,6 +75,7 @@ fn reply(win: Int, id: Int, r: Result[JsonValue, String]) : Unit / Ffi = match r
 }
 
 # `motu.report` prints its argument and quits: how an example's page reports a self-test.
+# `motu.snapshot` writes the window to a PNG at `out`.
 fn builtin(c: Call) : Option[Result[JsonValue, String]] / Stdout + Ffi = match c.cmd {
   "motu.report" -> {
     println(json.as_string(c.args) ?? json_encode(c.args))
@@ -84,10 +85,13 @@ fn builtin(c: Call) : Option[Result[JsonValue, String]] / Stdout + Ffi = match c
   _ -> None
 }
 
+fn snapshot(c: Call) : Result[JsonValue, String] / Desktop =
+  Ok(JBool(Desktop.snapshot(c.win, json.as_string(json.get(c.args, "out")) ?? "snapshot.png")))
+
 fn serve[e](commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e, c: Call, home: Pid[Incoming]) : Unit / Spawn + Ffi + Stdout + e = {
   let r = match builtin(c) {
     Some(answer) -> answer
-    None         -> desktop.with_desktop(() => commands(c))
+    None         -> desktop.with_desktop(() => if c.cmd == "motu.snapshot" { snapshot(c) } else { commands(c) })
   }
   reply(c.win, c.id, r)
   mailbox_send(home, Finished(c.win, c.id))

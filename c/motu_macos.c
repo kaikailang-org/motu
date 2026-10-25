@@ -565,6 +565,25 @@ void motu_print_pdf(void *reply, const char *html, const char *base_url, const c
   });
 }
 
+void motu_snapshot(void *reply, int64_t win, const char *out_path) {
+  char *out = strdup(out_path);
+  on_main(^{
+    if (!valid(win)) { motu_on_reply(reply, "false"); free(out); return; }
+    MSG(void, id, id)(g_views[win], SEL_("takeSnapshotWithConfiguration:completionHandler:"), (id)0, (id)^(id image, id error) {
+      (void)error;
+      int ok = 0;
+      if (image) {
+        id tiff = MSG(id)(image, SEL_("TIFFRepresentation"));
+        id rep = MSG(id, id)(CLS("NSBitmapImageRep"), SEL_("imageRepWithData:"), tiff);
+        id png = MSG(id, unsigned long, id)(rep, SEL_("representationUsingType:properties:"), 4UL, MSG(id)(CLS("NSDictionary"), SEL_("dictionary")));
+        ok = png && MSG(BOOL, id, BOOL)(png, SEL_("writeToFile:atomically:"), nsstr(out), YES);
+      }
+      motu_on_reply(reply, ok ? "true" : "false");
+      free(out);
+    });
+  });
+}
+
 /* --- setup --- */
 
 static id g_msg_handler, g_scheme_handler, g_win_delegate, g_app_delegate;

@@ -20,6 +20,7 @@ pub effect Desktop {
   focus(win: Int) : Unit
   set_menu_state(id: String, enabled: Bool, checked: Bool) : Unit
   print_pdf(html: String, base_url: String, out_path: String) : Bool
+  snapshot(win: Int, out_path: String) : Bool
   data_dir() : String
   serve_files(root: String) : Unit
   quit() : Unit
@@ -125,6 +126,7 @@ pub fn with_desktop[r, e](body: () -> r / Desktop + Dialog + Shell + Clipboard +
           focus(win, resume)                       -> resume(shim.motu_window_focus(win))
           set_menu_state(id, on, checked, resume)  -> resume(menu_state(id, on, checked))
           print_pdf(html, base, out, resume)       -> resume(print_to(html, base, out))
+          snapshot(win, out, resume)               -> resume(await_reply(ud => shim.motu_snapshot(ud, win, out)) == "true")
           data_dir(resume)                         -> resume(shim.motu_data_dir())
           serve_files(root, resume)                -> resume(shim.motu_set_files_root(root))
           quit(resume)                             -> resume(shim.motu_quit())

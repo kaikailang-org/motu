@@ -105,6 +105,10 @@ const char *motu_exe_dir(void);
  * `out_path` as PDF; answers true or false through motu_on_reply. */
 void motu_print_pdf(void *reply, const char *html, const char *base_url, const char *out_path);
 
+/* [any] Writes what window `win` shows to `out_path` as PNG; answers true or
+ * false through motu_on_reply. For tests and screenshots. */
+void motu_snapshot(void *reply, int64_t win, const char *out_path);
+
 /* --- callbacks, implemented by the kaikai side --- */
 
 extern void motu_on_message(void *ud, int64_t win, const char *json);
