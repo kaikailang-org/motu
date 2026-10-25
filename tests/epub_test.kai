@@ -1,0 +1,122 @@
+import motu.bytebuf
+import motu.epub
+import motu.zip
+import fs.dir
+import time
+
+fn meta() : epub.Metadata = epub.Metadata {
+  title: "Moai & Mana", author: "Ana <Tuki>", language: "es",
+  identifier: "urn:uuid:3f1c2a10-5b7e-4c1d-9a2b-1f2e3d4c5b6a",
+  date: WallTime { secs: 1761400000, nanos: 0 }
+}
+
+fn chapters() : [epub.Chapter] = [
+  epub.Chapter { title: "Rano Raraku", body: "<p>The quarry where the statues were carved.</p>" },
+  epub.Chapter { title: "Ahu & Tongariki", body: "<p>Fifteen <em>moai</em> on one platform.</p><p>Ñandú is not here.</p>" },
+  epub.Chapter { title: "Orongo", body: "<p>The birdman village.</p>" }
+]
+
+fn three() : epub.Book = epub.Book { ...epub.book(meta(), chapters()), css: Some("body { font-family: serif; }") }
+
+fn nibble(c: Int) : Int = if c >= 97 { c - 87 } else { c - 48 }
+
+fn unhex(s: String, i: Int, b: bytebuf.ByteBuf) : bytebuf.ByteBuf =
+  if i >= string_length(s) { b }
+  else { unhex(s, i + 2, bytebuf.push_byte(b, nibble(string_byte_at_int(s, i)) * 16 + nibble(string_byte_at_int(s, i + 1)))) }
+
+fn png() : Array[Byte] = bytebuf.to_array(unhex("89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de0000000c49444154789c6338e060000002f401314ca9e4570000000049454e44ae426082", 0, bytebuf.new(69)))
+
+fn entry_list(b: epub.Book) : [zip.Entry] = match epub.entries(b) {
+  Ok(es) -> es
+  Err(_) -> []
+}
+
+fn names(b: epub.Book) : [String] = entry_list(b) | .path
+
+fn text_of(b: epub.Book, path: String) : String = match entry_list(b) |? .path == path {
+  [e, ..._] -> bytebuf.to_string(e.data)
+  []        -> ""
+}
+
+fn has(b: epub.Book, path: String, needle: String) : Bool = string_contains(text_of(b, path), needle)
+
+# The names of the local headers, walked from the start of the archive.
+fn local_names(a: Array[Byte], off: Int, acc: [String]) : [String] =
+  if off + 30 > array_length(a) or bytes_get_le(a, off, 4) != 0x04034b50 { list_reverse(acc) } else {
+    let n = bytes_get_le(a, off + 26, 2)
+    let next = off + 30 + n + bytes_get_le(a, off + 28, 2) + bytes_get_le(a, off + 18, 4)
+    local_names(a, next, [bytes_get_string(a, off + 30, n), ...acc])
+  }
+
+fn built(b: epub.Book) : Array[Byte] = match epub.build(b) {
+  Ok(a)  -> a
+  Err(_) -> array_make(0, bin_byte(0))
+}
+
+fn refused(b: epub.Book) : Bool = match epub.build(b) {
+  Ok(_)  -> false
+  Err(_) -> true
+}
+
+test "three chapters give the container files, then one page each" {
+  assert names(three()) == [
+    "mimetype", "META-INF/container.xml", "OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/toc.ncx",
+    "OEBPS/style.css", "OEBPS/chapter-001.xhtml", "OEBPS/chapter-002.xhtml", "OEBPS/chapter-003.xhtml"
+  ]
+}
+
+test "the archive starts with mimetype, stored, with no extra field" {
+  let a = built(three())
+  assert bytes_get_le(a, 8, 2) == 0 and bytes_get_le(a, 28, 2) == 0
+  assert bytes_get_string(a, 30, 8) == "mimetype"
+  assert bytes_get_string(a, 38, 20) == "application/epub+zip"
+  assert local_names(a, 0, []) == names(three())
+}
+
+test "the package document holds metadata, manifest and spine" {
+  let b = three()
+  assert has(b, "OEBPS/content.opf", "<dc:title>Moai &amp; Mana</dc:title>")
+  assert has(b, "OEBPS/content.opf", "<dc:creator id=\"creator\">Ana &lt;Tuki&gt;</dc:creator>")
+  assert has(b, "OEBPS/content.opf", "<meta property=\"dcterms:modified\">2025-10-25T13:46:40Z</meta>")
+  assert has(b, "OEBPS/content.opf", "<dc:date>2025-10-25</dc:date>")
+  assert has(b, "OEBPS/content.opf", "<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>")
+  assert has(b, "OEBPS/content.opf", "<spine toc=\"ncx\"><itemref idref=\"c001\"/><itemref idref=\"c002\"/><itemref idref=\"c003\"/></spine>")
+}
+
+test "the nav document and the NCX link every chapter in order" {
+  let b = three()
+  assert has(b, "OEBPS/nav.xhtml", "<ol><li><a href=\"chapter-001.xhtml\">Rano Raraku</a></li><li><a href=\"chapter-002.xhtml\">Ahu &amp; Tongariki</a></li>")
+  assert has(b, "OEBPS/toc.ncx", "<navPoint id=\"nav-3\" playOrder=\"3\"><navLabel><text>Orongo</text></navLabel><content src=\"chapter-003.xhtml\"/></navPoint>")
+  assert has(b, "OEBPS/toc.ncx", "<meta name=\"dtb:uid\" content=\"urn:uuid:3f1c2a10-5b7e-4c1d-9a2b-1f2e3d4c5b6a\"/>")
+}
+
+test "a chapter page escapes its title and keeps its body" {
+  let b = three()
+  assert has(b, "OEBPS/chapter-002.xhtml", "<h1>Ahu &amp; Tongariki</h1><p>Fifteen <em>moai</em> on one platform.</p>")
+  assert has(b, "OEBPS/chapter-002.xhtml", "<link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"/>")
+  assert string_contains(text_of(b, "OEBPS/chapter-001.xhtml"), "<!DOCTYPE html>")
+}
+
+test "a cover adds the image, its page and the cover-image property" {
+  let b = epub.Book { ...three(), cover: Some(png()) }
+  assert epub.image_type(png()) == Some(("image/png", "png"))
+  assert has(b, "OEBPS/content.opf", "<item id=\"cover-image\" href=\"cover.png\" media-type=\"image/png\" properties=\"cover-image\"/>")
+  assert has(b, "OEBPS/content.opf", "<itemref idref=\"cover\"/><itemref idref=\"c001\"/>")
+  assert has(b, "OEBPS/cover.xhtml", "<img src=\"cover.png\" alt=\"Moai &amp; Mana\"/>")
+}
+
+test "incomplete metadata and an unknown cover format are refused" {
+  assert refused(epub.book(epub.Metadata { ...meta(), title: "" }, chapters()))
+  assert refused(epub.book(epub.Metadata { ...meta(), identifier: "" }, chapters()))
+  assert refused(epub.book(epub.Metadata { ...meta(), language: "" }, chapters()))
+  assert refused(epub.Book { ...three(), cover: Some(bytebuf.of_string("not an image")) })
+}
+
+test "writes the books tools/check-archives.sh validates" {
+  dir.create_dir("build") |> ignore
+  dir.create_dir("build/archives") |> ignore
+  assert epub.write_file("build/archives/book.epub", three()) == Ok(())
+  assert epub.write_file("build/archives/book-cover.epub", epub.Book { ...three(), cover: Some(png()) }) == Ok(())
+}
+
+fn main() : Int = 0
