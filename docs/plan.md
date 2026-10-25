@@ -318,6 +318,24 @@ and Linux answers four questions with measurements:
    (Safari 27) (R); the WebKitGTK versions of current distributions decide
    the same on Linux.
 
+Answers, measured (M) on macOS 26.6.2 (Apple M4 Pro) and on the GitHub
+`ubuntu-24.04` runner:
+
+1. The model holds. `main` blocks in `motu_run` and every callback arrives on
+   it; commands run on other fibers. Under `KAI_THREADS=1` the program would
+   hang, since the only scheduler thread is blocked in the event loop, so
+   `motu_init` refuses it with a message and exit status 2.
+2. 106–124 µs on macOS, 343–610 µs on the Linux runner (figures above).
+3. Not needed: the shims are C over the Objective-C runtime and load every
+   framework with `dlopen`, so `[native]` takes C sources only and links
+   nothing.
+4. In part. A kaikai page built with `--target=wasm32-browser` runs in
+   WKWebView on macOS 26.6.2: that WebKit has exception handling with exnref.
+   A page that spawns a fiber does not: there is no JSPI, and the host says
+   so instead of failing silently. Not yet measured on WebKitGTK. So stage 1
+   pages are JavaScript, as decided, and kaikai pages wait for JSPI in the
+   system WebKit.
+
 ## Motu and ahu
 
 Motu depends on kaikai alone: its tasks are fibers in a per-window nursery,
@@ -347,7 +365,7 @@ can own the state behind it.
 | zip writer (stored + CRC-32; deflate) | Motu | shipped |
 | flush a file to disk (`fsync`) for atomic saves | Motu shim | `motu_fsync_path` (`F_FULLFSYNC` on macOS) |
 | XML writer | Motu | shipped |
-| Markdown parser (CommonMark plus footnotes) to a syntax tree | kaikai stdlib or an ecosystem package | missing |
+| Markdown parser (CommonMark plus footnotes) to a syntax tree | Motu | shipped: `motu.markdown` |
 | Windows runtime | kaikai | not started; spike numbers above |
 
 Each missing kaikai piece becomes an issue in `lnds/kaikai` when its

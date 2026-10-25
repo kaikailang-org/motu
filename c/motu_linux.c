@@ -783,6 +783,9 @@ static void *ui_main(void *arg) {
 }
 
 void motu_init(void *ud, const char *app_name) {
+  /* The main fiber stays blocked in motu_run; commands need a second scheduler thread. */
+  const char *threads = getenv("KAI_THREADS");
+  if (threads && strcmp(threads, "1") == 0) { fprintf(stderr, "motu: KAI_THREADS=1 leaves no thread to run commands; unset it or raise it\n"); exit(2); }
   g_ud = ud;
   load_libraries();
   g_set_application_name(app_name);
