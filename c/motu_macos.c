@@ -17,6 +17,51 @@
 #include <string.h>
 #include <unistd.h>
 
+/* The Objective-C runtime is loaded with dlopen like the frameworks, so the
+ * package links nothing on any platform. Every runtime call below goes through
+ * these pointers, set in motu_init. */
+#define OBJC_FNS(X) \
+  X(Class, objc_getClass, (const char *)) \
+  X(SEL, sel_registerName, (const char *)) \
+  X(void, objc_msgSend, (void)) \
+  X(void, objc_msgSendSuper, (void)) \
+  X(Class, objc_allocateClassPair, (Class, const char *, size_t)) \
+  X(void, objc_registerClassPair, (Class)) \
+  X(BOOL, class_addMethod, (Class, SEL, IMP, const char *)) \
+  X(BOOL, class_addProtocol, (Class, Protocol *)) \
+  X(BOOL, class_addIvar, (Class, const char *, size_t, uint8_t, const char *)) \
+  X(Class, class_getSuperclass, (Class)) \
+  X(BOOL, class_respondsToSelector, (Class, SEL)) \
+  X(Protocol *, objc_getProtocol, (const char *)) \
+  X(Class, object_getClass, (id)) \
+  X(Ivar, object_getInstanceVariable, (id, const char *, void **)) \
+  X(Ivar, object_setInstanceVariable, (id, const char *, void *))
+#define OBJC_PTR(ret, name, args) static ret (*p_##name) args;
+OBJC_FNS(OBJC_PTR)
+#define objc_getClass p_objc_getClass
+#define sel_registerName p_sel_registerName
+#define objc_msgSend p_objc_msgSend
+#define objc_msgSendSuper p_objc_msgSendSuper
+#define objc_allocateClassPair p_objc_allocateClassPair
+#define objc_registerClassPair p_objc_registerClassPair
+#define class_addMethod p_class_addMethod
+#define class_addProtocol p_class_addProtocol
+#define class_addIvar p_class_addIvar
+#define class_getSuperclass p_class_getSuperclass
+#define class_respondsToSelector p_class_respondsToSelector
+#define objc_getProtocol p_objc_getProtocol
+#define object_getClass p_object_getClass
+#define object_getInstanceVariable p_object_getInstanceVariable
+#define object_setInstanceVariable p_object_setInstanceVariable
+
+static int load_objc(void) {
+  void *rt = dlopen("/usr/lib/libobjc.A.dylib", RTLD_LAZY | RTLD_GLOBAL);
+  if (!rt) return 0;
+#define OBJC_LOAD(ret, name, args) *(void **)&p_##name = dlsym(rt, #name); if (!p_##name) return 0;
+  OBJC_FNS(OBJC_LOAD)
+  return 1;
+}
+
 typedef struct { double x, y, w, h; } MotuRect;
 typedef struct { double w, h; } MotuSize;
 
@@ -151,8 +196,9 @@ static const char *mime_of(const char *path) {
 }
 
 static void scheme_respond(id task, id url, long code, const char *mime, id data) {
-  id headers = MSG(id, id, id)(CLS("NSDictionary"), SEL_("dictionaryWithObject:forKey:"),
-      nsstr(mime), nsstr("Content-Type"));
+  /* The page (motu://app) may fetch from motu://files, another origin. */
+  id headers = MSG(id, id, id, id)(CLS("NSDictionary"), SEL_("dictionaryWithObjectsAndKeys:"),
+      nsstr(mime), nsstr("Content-Type"), nsstr("motu://app"), nsstr("Access-Control-Allow-Origin"), (id)0);
   id resp = MSG(id, id, long, id, id)(MSG(id)(CLS("NSHTTPURLResponse"), SEL_("alloc")),
       SEL_("initWithURL:statusCode:HTTPVersion:headerFields:"), url, code, nsstr("HTTP/1.1"), headers);
   MSG(void, id)(task, SEL_("didReceiveResponse:"), resp);
@@ -536,6 +582,7 @@ static id instance_of(Class c) {
 void motu_init(void *ud, const char *app_name) {
   (void)app_name;
   g_ud = ud;
+  if (!load_objc()) { fprintf(stderr, "motu: cannot load the Objective-C runtime\n"); exit(1); }
   dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", RTLD_LAZY | RTLD_GLOBAL);
   dlopen("/System/Library/Frameworks/WebKit.framework/WebKit", RTLD_LAZY | RTLD_GLOBAL);
   g_app = MSG(id)(CLS("NSApplication"), SEL_("sharedApplication"));
