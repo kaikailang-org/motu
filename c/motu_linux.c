@@ -358,7 +358,7 @@ typedef struct { char *id; char *accel; int64_t flags; } Item;
 typedef struct {
   Item items[MOTU_MAX_ITEMS];
   int count;
-  void *bar;
+  void *bar, *first;
 } MenuBar;
 
 static MenuBar g_building, g_menus;
@@ -370,6 +370,14 @@ static void free_menubar(MenuBar *m) {
   if (m->bar) g_object_unref(m->bar);
   memset(m, 0, sizeof *m);
 }
+
+static int item_index(const MenuBar *m, const char *id_) {
+  for (int i = 0; i < m->count; i++)
+    if (strcmp(m->items[i].id, id_) == 0) return i;
+  return -1;
+}
+
+static int checkable(int64_t flags) { return (flags & (MOTU_MENU_CHECKED | MOTU_MENU_CHECKABLE)) != 0; }
 
 static void action_name(char *out, size_t n, int index, int qualified) {
   snprintf(out, n, "%sm%d", qualified ? "motu." : "", index);
@@ -438,7 +446,7 @@ static void attach_menus(int64_t win) {
   void *shortcuts = gtk_shortcut_controller_new();
   gtk_event_controller_set_propagation_phase(shortcuts, PHASE_CAPTURE);
   for (int i = 0; i < g_menus.count; i++) {
-    void *a = new_action(win, i, (g_menus.items[i].flags & MOTU_MENU_CHECKED) != 0);
+    void *a = new_action(win, i, checkable(g_menus.items[i].flags));
     g_action_map_add_action(group, a);
     g_object_unref(a);
     if (g_menus.items[i].accel) {
@@ -478,6 +486,7 @@ static void menu_begin(const char *title) {
   void *sub = new_menu_with_section(&section);
   g_menu_append_submenu(g_menu_stack[g_menu_depth - 1].section, title, sub);
   g_object_unref(sub);
+  if (!g_building.first) g_building.first = sub;
   g_menu_stack[g_menu_depth].menu = sub;
   g_menu_stack[g_menu_depth].section = section;
   g_menu_depth++;
@@ -510,8 +519,18 @@ static void menu_end(void) {
   if (g_menu_depth > 1) g_menu_depth--;
 }
 
+/* Linux has no application menu: without a Quit item the bar gets one. */
+static void add_quit(void) {
+  if (!g_building.first || item_index(&g_building, "quit") >= 0) return;
+  g_menu_stack[1].menu = g_menu_stack[1].section = g_building.first;
+  g_menu_depth = 2;
+  menu_separator();
+  menu_item("quit", "Quit", "q", 0);
+}
+
 static void menu_install(void) {
   if (g_menu_depth < 1) return;
+  add_quit();
   MenuBar old = g_menus;
   g_menus = g_building;
   memset(&g_building, 0, sizeof g_building);
@@ -535,16 +554,11 @@ void motu_menu_separator(void) { lx_on_ui(lx_job(menu_separator_job, 0, 0, 0, 0,
 void motu_menu_end(void) { lx_on_ui(lx_job(menu_end_job, 0, 0, 0, 0, 0, 0)); }
 void motu_menu_install(void) { lx_on_ui(lx_job(menu_install_job, 0, 0, 0, 0, 0, 0)); }
 
-static int find_item(const char *id_) {
-  for (int i = 0; i < g_menus.count; i++)
-    if (strcmp(g_menus.items[i].id, id_) == 0) return i;
-  return -1;
-}
 
 static void menu_state_main(Job *j) {
-  int index = find_item(j->s[0]);
+  int index = item_index(&g_menus, j->s[0]);
   if (index < 0) return;
-  g_menus.items[index].flags = j->a;
+  g_menus.items[index].flags = j->a | (g_menus.items[index].flags & MOTU_MENU_CHECKABLE);
   char name[32];
   action_name(name, sizeof name, index, 0);
   for (int64_t win = 1; win <= MOTU_MAX_WINDOWS; win++) {

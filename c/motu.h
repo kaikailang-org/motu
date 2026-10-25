@@ -51,11 +51,13 @@ void motu_post(int64_t win, const char *json);
  * The menu bar is built depth-first and replaces the previous one on
  * motu_menu_install. `key` is the accelerator: one character, upper case
  * meaning shift; "" for none. The primary modifier (Command, Control) is
- * implied. flags: MOTU_MENU_DISABLED, MOTU_MENU_CHECKED. An item with the id
+ * implied. flags: MOTU_MENU_DISABLED, MOTU_MENU_CHECKED, MOTU_MENU_CHECKABLE
+ * (the item can carry a checkmark, even while unchecked). An item with the id
  * of a standard action (MOTU_ACTION_*) gets the platform's own behaviour. */
 
 #define MOTU_MENU_DISABLED 1
 #define MOTU_MENU_CHECKED 2
+#define MOTU_MENU_CHECKABLE 4
 
 void motu_menu_begin(const char *title);
 void motu_menu_item(const char *id, const char *title, const char *key, int64_t flags);
@@ -71,7 +73,7 @@ void motu_menu_set_state(const char *id, int64_t flags);
 /* --- dialogs ---
  * [any] Asynchronous: the answer arrives through motu_on_reply with the same
  * `reply`. Open and save answer a JSON array of paths, [] when cancelled;
- * message answers the index of the button pressed. */
+ * message answers the index of the button pressed, -1 when cancelled. */
 
 #define MOTU_OPEN_DIRECTORIES 1
 #define MOTU_OPEN_MULTIPLE 2
