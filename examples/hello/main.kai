@@ -1,0 +1,51 @@
+import ffi
+import os.env
+import time
+import encoding.json
+import encoding.json_bind
+import motu.app
+import motu.desktop
+import motu.menu
+import motu.shim
+
+fn command(c: Call) : Result[JsonValue, String] / Desktop + Stdout + Clock = match c.cmd {
+  "greet"  -> Ok(JStr("Hello, #{app.arg_string(c, "name") ?? "you"}, from kaikai"))
+  "ping"   -> Ok(JNull)
+  "slow"   -> { time.sleep(time.seconds(5)); Ok(JStr("finished")) }
+  "report" -> { println(json.as_string(c.args) ?? ""); Desktop.quit(); Ok(JNull) }
+  other    -> Err("unknown command #{other}")
+}
+
+fn main() : Int / Spawn + Ffi + Stdout + Env + Clock = {
+  let page = env.get("MOTU_PAGE") ?? "index.html"
+  let cfg = Config {
+    name: "Hello", assets: "examples/hello/assets", page: page,
+    title: "Motu", width: 640, height: 400, menus: [menu.edit_menu()],
+  }
+  app.run(cfg, c => command(c), ev => app.default_event(ev))
+}
+
+extern "C" fn motu_on_message(ud: Userdata, win: Int, json: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, PageMessage(win, json))
+}
+
+extern "C" fn motu_on_window_event(ud: Userdata, win: Int, kind: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, WindowEvent(win, kind))
+}
+
+extern "C" fn motu_on_menu(ud: Userdata, id: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, MenuChosen(id))
+}
+
+extern "C" fn motu_on_drop(ud: Userdata, win: Int, paths: String) : Unit = {
+  let pid: Pid[Incoming] = take_userdata(ud)
+  mailbox_send(pid, Dropped(win, paths))
+}
+
+extern "C" fn motu_on_reply(ud: Userdata, json: String) : Unit = {
+  let pid: Pid[String] = take_userdata(ud)
+  mailbox_send(pid, json)
+}

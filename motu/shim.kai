@@ -1,0 +1,44 @@
+#[doc("The platform layer: the C calls behind `c/motu.h`, and what the shim reports back.")]
+import ffi
+
+#[doc("What reaches the application's dispatcher: from the shim, or from a command that finished.")]
+pub type Incoming
+  = PageMessage(Int, String)
+  | WindowEvent(Int, String)
+  | MenuChosen(String)
+  | Dropped(Int, String)
+  | Finished(Int, Int)
+  | Shutdown
+
+extern "C" pub fn motu_init(ud: Userdata, app_name: String) : Unit / Ffi
+extern "C" pub fn motu_run() : Unit / Ffi
+extern "C" pub fn motu_quit() : Unit / Ffi
+extern "C" pub fn motu_set_asset_root(root: String) : Unit / Ffi
+
+extern "C" pub fn motu_window_new(title: String, width: Int, height: Int) : Int / Ffi
+extern "C" pub fn motu_window_load(win: Int, url: String) : Unit / Ffi
+extern "C" pub fn motu_window_set_title(win: Int, title: String) : Unit / Ffi
+extern "C" pub fn motu_window_set_min_size(win: Int, width: Int, height: Int) : Unit / Ffi
+extern "C" pub fn motu_window_set_fullscreen(win: Int, on: Int) : Unit / Ffi
+extern "C" pub fn motu_window_focus(win: Int) : Unit / Ffi
+extern "C" pub fn motu_window_close(win: Int) : Unit / Ffi
+extern "C" pub fn motu_post(win: Int, json: String) : Unit / Ffi
+
+extern "C" pub fn motu_menu_begin(title: String) : Unit / Ffi
+extern "C" pub fn motu_menu_item(id: String, title: String, key: String, flags: Int) : Unit / Ffi
+extern "C" pub fn motu_menu_separator() : Unit / Ffi
+extern "C" pub fn motu_menu_end() : Unit / Ffi
+extern "C" pub fn motu_menu_install() : Unit / Ffi
+extern "C" pub fn motu_menu_set_state(id: String, flags: Int) : Unit / Ffi
+
+extern "C" pub fn motu_dialog_open(reply: Userdata, win: Int, title: String, flags: Int, extensions: String) : Unit / Ffi
+extern "C" pub fn motu_dialog_save(reply: Userdata, win: Int, title: String, suggested: String) : Unit / Ffi
+extern "C" pub fn motu_dialog_message(reply: Userdata, win: Int, title: String, message: String, buttons: String) : Unit / Ffi
+
+extern "C" pub fn motu_shell_open(path: String) : Unit / Ffi
+extern "C" pub fn motu_shell_reveal(path: String) : Unit / Ffi
+extern "C" pub fn motu_clipboard_set_text(text: String) : Unit / Ffi
+extern "C" pub fn motu_clipboard_get_text(reply: Userdata) : Unit / Ffi
+extern "C" pub fn motu_fsync_path(path: String) : Int / Ffi
+extern "C" pub fn motu_data_dir() : String / Ffi
+extern "C" pub fn motu_print_pdf(reply: Userdata, url: String, out_path: String) : Unit / Ffi

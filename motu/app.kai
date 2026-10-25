@@ -1,0 +1,166 @@
+#[doc("""
+A Motu application. The page calls commands over the channel; each call runs
+on its own fiber with the desktop capabilities, and the page may cancel it.
+Window and menu events go to the application's event handler, also on a
+fiber of their own.
+""")]
+import actor
+import ffi
+import spawn
+import encoding.json
+import encoding.json_bind
+import motu.desktop
+import motu.menu
+import motu.shim
+
+#[doc("One call from the page: the window it came from, its id, the command name and its arguments.")]
+pub type Call = { win: Int, id: Int, cmd: String, args: JsonValue }
+
+#[doc("What the application hears besides commands.")]
+pub type Event
+  = MenuItem(String)
+  | FilesDropped(Int, [String])
+  | CloseRequested(Int)
+  | QuitRequested
+  | Focused(Int)
+  | Blurred(Int)
+  | Resized(Int)
+
+#[doc("How the application starts: its name, where its page is served from, the first window and the menu bar.")]
+pub type Config = {
+  name: String,
+  assets: String,
+  page: String,
+  title: String,
+  width: Int,
+  height: Int,
+  menus: [Menu],
+}
+
+#[doc("The answer the default event handler gives: close a window when asked, quit when asked.")]
+pub fn default_event(ev: Event) : Unit / Desktop = match ev {
+  CloseRequested(win) -> Desktop.close_window(win)
+  QuitRequested       -> Desktop.quit()
+  _                   -> ()
+}
+
+#[doc("An argument of the call by name: `JNull` when absent.")]
+pub fn arg(c: Call, name: String) : JsonValue = json.get(c.args, name)
+
+#[doc("A string argument of the call, if present.")]
+pub fn arg_string(c: Call, name: String) : Option[String] = json.as_string(arg(c, name))
+
+#[doc("A typed argument: `decode` is a derived `<type>_of_json`; a decode error becomes the call's error.")]
+pub fn decode[t](c: Call, decode: (JsonValue, String) -> Result[t, JsonError]) : Result[t, String] =
+  match decode(c.args, "args") {
+    Ok(v)  -> Ok(v)
+    Err(e) -> Err(json_error_show(e))
+  }
+
+type Running = { win: Int, id: Int, fiber: Fiber[Unit] }
+
+type Handlers[e] = {
+  commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e,
+  events: (Event) -> Unit / Desktop + Dialog + Shell + Clipboard + e,
+}
+
+fn text_of(v: JsonValue) : String = json.as_string(v) ?? ""
+
+fn int_of(v: JsonValue) : Int = json.as_int(v) ?? 0
+
+fn reply_json(id: Int, r: Result[JsonValue, String]) : String = match r {
+  Ok(v)  -> json_encode(JObj([("t", JStr("reply")), ("id", JNum(id)), ("ok", v)]))
+  Err(e) -> json_encode(JObj([("t", JStr("reply")), ("id", JNum(id)), ("err", JStr(e))]))
+}
+
+fn serve[e](commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e, c: Call, home: Pid[Incoming]) : Unit / Spawn + Ffi + e = {
+  let r = desktop.with_desktop(() => commands(c))
+  shim.motu_post(c.win, reply_json(c.id, r))
+  mailbox_send(home, Finished(c.win, c.id))
+}
+
+fn paths_of(text: String) : [String] = match json_decode(text) {
+  Some(JArr(xs)) -> xs || (x => match x { JStr(s) -> [s]; _ -> [] })
+  _              -> []
+}
+
+fn event_of(win: Int, kind: String) : Option[Event] = match kind {
+  "close-requested" -> Some(CloseRequested(win))
+  "quit-requested"  -> Some(QuitRequested)
+  "focus"           -> Some(Focused(win))
+  "blur"            -> Some(Blurred(win))
+  "resize"          -> Some(Resized(win))
+  _                 -> None
+}
+
+fn cancel_one(r: Running) : Unit / Spawn + Ffi = {
+  Spawn.cancel(r.fiber)
+  shim.motu_post(r.win, reply_json(r.id, Err("cancelled")))
+}
+
+fn call_of(win: Int, m: JsonValue) : Call =
+  Call { win: win, id: int_of(json.get(m, "id")), cmd: text_of(json.get(m, "cmd")), args: json.get(m, "args") }
+
+fn notify[e](h: Handlers[e], ev: Event) : Unit / Spawn + Ffi + e =
+  Spawn.spawn(() => desktop.with_desktop(() => (h.events)(ev))) |> ignore
+
+fn on_window_event[e](h: Handlers[e], win: Int, kind: String) : Unit / Spawn + Ffi + e =
+  match event_of(win, kind) {
+    Some(ev) -> notify(h, ev)
+    None     -> ()
+  }
+
+fn dispatch[e](h: Handlers[e], running: [Running]) : Unit / Actor[Incoming] + Spawn + Ffi + e =
+  match Actor.receive() {
+    PageMessage(win, text) -> {
+      let m = json_decode(text) ?? JNull
+      let id = int_of(json.get(m, "id"))
+      match text_of(json.get(m, "t")) {
+        "call" -> {
+          let c = call_of(win, m)
+          let home = Actor.self()
+          dispatch(h, [Running { win: win, id: id, fiber: Spawn.spawn(() => serve(h.commands, c, home)) }, ...running])
+        }
+        "cancel" -> {
+          running |? (r => r.win == win and r.id == id) |! cancel_one
+          dispatch(h, running |? (r => not (r.win == win and r.id == id)))
+        }
+        _ -> dispatch(h, running)
+      }
+    }
+    Finished(win, id)      -> dispatch(h, running |? (r => not (r.win == win and r.id == id)))
+    MenuChosen(id)         -> { notify(h, MenuItem(id)); dispatch(h, running) }
+    Dropped(win, paths)    -> { notify(h, FilesDropped(win, paths_of(paths))); dispatch(h, running) }
+    WindowEvent(win, "closed") -> {
+      running |? (r => r.win == win) |! cancel_one
+      dispatch(h, running |? (r => r.win != win))
+    }
+    WindowEvent(win, kind) -> { on_window_event(h, win, kind); dispatch(h, running) }
+    Shutdown               -> running |! cancel_one
+  }
+
+#[doc("""
+Opens the first window and runs until the application quits. Each page call
+runs `commands` on its own fiber; every other event goes to `events`
+(`default_event` closes and quits when asked). Closing a window cancels the
+commands it started. Must be called from `main`: the platform's event loop
+needs the main thread.
+""")]
+pub fn run[e](
+  cfg: Config,
+  commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e,
+  events: (Event) -> Unit / Desktop + Dialog + Shell + Clipboard + e,
+) : Int / Spawn + Ffi + e = {
+  let h = Handlers { commands: commands, events: events }
+  let pid = spawn_actor(() => dispatch(h, []))
+  let ud = retain_userdata(pid)
+  shim.motu_init(ud, cfg.name)
+  shim.motu_set_asset_root(cfg.assets)
+  menu.install(cfg.menus)
+  let win = shim.motu_window_new(cfg.title, cfg.width, cfg.height)
+  shim.motu_window_load(win, "motu://app/#{cfg.page}")
+  shim.motu_run()
+  mailbox_send(pid, Shutdown)
+  release_userdata(ud)
+  0
+}

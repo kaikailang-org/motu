@@ -1,0 +1,10 @@
+name = "motu"
+version = "0.1.0"
+edition = "hanga-roa"
+
+[dependencies]
+
+[native]
+sources = ["c/motu_macos.c"]
+include = ["c"]
+libs = ["objc"]

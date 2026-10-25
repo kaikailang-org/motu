@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Motu</title>
+<style>
+  :root { color-scheme: light dark; font-family: -apple-system, system-ui, sans-serif; }
+  body { margin: 2rem; }
+  input, button { font: inherit; padding: .4rem .6rem; }
+  #out { margin-top: 1rem; font-size: 1.2rem; }
+</style>
+</head>
+<body>
+<h1>Motu</h1>
+<input id="name" placeholder="your name" autofocus>
+<button id="go">Greet</button>
+<div id="out"></div>
+<script>
+  document.getElementById('go').onclick = async () => {
+    const t0 = performance.now();
+    try {
+      const msg = await motu.invoke('greet', { name: document.getElementById('name').value });
+      document.getElementById('out').textContent = `${msg} (${(performance.now() - t0).toFixed(2)} ms)`;
+    } catch (e) {
+      document.getElementById('out').textContent = 'error: ' + e.message;
+    }
+  };
+  if (location.hash === '#selftest') (async () => {
+    const hi = await motu.invoke('greet', { name: 'selftest' });
+    const n = 2000; const t0 = performance.now();
+    for (let i = 0; i < n; i++) await motu.invoke('ping');
+    const per = ((performance.now() - t0) / n * 1000).toFixed(1);
+    let err = ''; try { await motu.invoke('nope'); } catch (e) { err = e.message; }
+    const slow = motu.invoke('slow'); const c0 = performance.now();
+    setTimeout(() => motu.cancel(slow), 50);
+    let cancelled = ''; try { cancelled = await slow; } catch (e) { cancelled = e.message; }
+    const cms = (performance.now() - c0).toFixed(0);
+    await motu.invoke('ping');
+    await motu.invoke('report', `${hi} | ${n} pings: ${per} us each | error path: ${err} | slow: ${cancelled} after ${cms} ms`);
+  })();
+</script>
+</body>
+</html>

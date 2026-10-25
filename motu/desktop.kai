@@ -1,0 +1,141 @@
+#[doc("""
+The capabilities a command may use, as effects: `Desktop` (windows, events to
+the page, menus, quitting), `Dialog`, `Shell` and `Clipboard`. A command's row
+says which of them it uses; `with_desktop` answers all four with the platform.
+""")]
+import actor
+import ffi
+import spawn
+import encoding.json
+import encoding.json_bind
+import motu.shim
+
+#[doc("Windows, events to the page, menu state, printing and the application's own lifetime.")]
+pub effect Desktop {
+  emit(win: Int, name: String, data: JsonValue) : Unit
+  open_window(title: String, width: Int, height: Int, page: String) : Int
+  close_window(win: Int) : Unit
+  set_title(win: Int, title: String) : Unit
+  set_min_size(win: Int, width: Int, height: Int) : Unit
+  set_fullscreen(win: Int, on: Bool) : Unit
+  focus(win: Int) : Unit
+  set_menu_state(id: String, enabled: Bool, checked: Bool) : Unit
+  print_pdf(url: String, out_path: String) : Bool
+  data_dir() : String
+  quit() : Unit
+}
+
+#[doc("Open, save and message dialogs; each waits for the user's answer without blocking other commands.")]
+pub effect Dialog {
+  open_files(win: Int, title: String, extensions: [String], multiple: Bool) : [String]
+  open_folder(win: Int, title: String) : Option[String]
+  save_file(win: Int, title: String, suggested: String) : Option[String]
+  ask(win: Int, title: String, message: String, buttons: [String]) : Int
+}
+
+#[doc("Hands a file to the operating system: open it with its default application, or show it in the file manager.")]
+pub effect Shell {
+  open_path(path: String) : Unit
+  reveal_path(path: String) : Unit
+}
+
+#[doc("The system clipboard, as plain text.")]
+pub effect Clipboard {
+  set_text(text: String) : Unit
+  text() : String
+}
+
+const OPEN_DIRECTORIES : Int = 1
+const OPEN_MULTIPLE : Int = 2
+const MENU_DISABLED : Int = 1
+const MENU_CHECKED : Int = 2
+
+# Starts a platform call that answers through motu_on_reply, and waits for it.
+fn await_reply(start: (Userdata) -> Unit / Ffi) : String / Spawn + Ffi = with_mailbox {
+  let ud = retain_userdata(Actor.self())
+  start(ud)
+  let answer: String = Actor.receive()
+  release_userdata(ud)
+  answer
+}
+
+fn strings_of(text: String) : [String] = match json_decode(text) {
+  Some(JArr(xs)) -> xs || (x => match x { JStr(s) -> [s]; _ -> [] })
+  _              -> []
+}
+
+fn first_of(xs: [String]) : Option[String] = match xs {
+  [x, ..._] -> Some(x)
+  []        -> None
+}
+
+fn flag(on: Bool, bit: Int) : Int = if on { bit } else { 0 }
+
+fn post_event(win: Int, name: String, data: JsonValue) : Unit / Ffi =
+  shim.motu_post(win, json_encode(JObj([("t", JStr("event")), ("name", JStr(name)), ("data", data)])))
+
+fn new_window(title: String, width: Int, height: Int, page: String) : Int / Ffi = {
+  let win = shim.motu_window_new(title, width, height)
+  shim.motu_window_load(win, "motu://app/#{page}")
+  win
+}
+
+fn pick_files(win: Int, title: String, exts: [String], multiple: Bool) : [String] / Spawn + Ffi = {
+  let flags = flag(multiple, OPEN_MULTIPLE)
+  strings_of(await_reply(ud => shim.motu_dialog_open(ud, win, title, flags, string.join(exts, ","))))
+}
+
+fn pick_folder(win: Int, title: String) : Option[String] / Spawn + Ffi =
+  first_of(strings_of(await_reply(ud => shim.motu_dialog_open(ud, win, title, OPEN_DIRECTORIES, ""))))
+
+fn pick_save(win: Int, title: String, suggested: String) : Option[String] / Spawn + Ffi =
+  first_of(strings_of(await_reply(ud => shim.motu_dialog_save(ud, win, title, suggested))))
+
+fn ask_user(win: Int, title: String, message: String, buttons: [String]) : Int / Spawn + Ffi = {
+  let labels = string.join(buttons, "\n")
+  string.to_int(await_reply(ud => shim.motu_dialog_message(ud, win, title, message, labels))) ?? -1
+}
+
+fn clipboard_text() : String / Spawn + Ffi = {
+  let answer = await_reply(ud => shim.motu_clipboard_get_text(ud))
+  json.as_string(json_decode(answer) ?? JNull) ?? ""
+}
+
+fn print_to(url: String, out: String) : Bool / Spawn + Ffi =
+  await_reply(ud => shim.motu_print_pdf(ud, url, out)) == "true"
+
+fn menu_state(id: String, enabled: Bool, checked: Bool) : Unit / Ffi =
+  shim.motu_menu_set_state(id, flag(not enabled, MENU_DISABLED) + flag(checked, MENU_CHECKED))
+
+#[doc("Runs `body` with the four desktop capabilities answered by the platform.")]
+pub fn with_desktop[r, e](body: () -> r / Desktop + Dialog + Shell + Clipboard + e) : r / Spawn + Ffi + e =
+  handle {
+    handle {
+      handle {
+        handle { body() } with Desktop {
+          emit(win, name, data, resume)            -> resume(post_event(win, name, data))
+          open_window(title, w, h, page, resume)   -> resume(new_window(title, w, h, page))
+          close_window(win, resume)                -> resume(shim.motu_window_close(win))
+          set_title(win, title, resume)            -> resume(shim.motu_window_set_title(win, title))
+          set_min_size(win, w, h, resume)          -> resume(shim.motu_window_set_min_size(win, w, h))
+          set_fullscreen(win, on, resume)          -> resume(shim.motu_window_set_fullscreen(win, flag(on, 1)))
+          focus(win, resume)                       -> resume(shim.motu_window_focus(win))
+          set_menu_state(id, on, checked, resume)  -> resume(menu_state(id, on, checked))
+          print_pdf(url, out, resume)              -> resume(print_to(url, out))
+          data_dir(resume)                         -> resume(shim.motu_data_dir())
+          quit(resume)                             -> resume(shim.motu_quit())
+        }
+      } with Dialog {
+        open_files(win, title, exts, multiple, resume) -> resume(pick_files(win, title, exts, multiple))
+        open_folder(win, title, resume)                -> resume(pick_folder(win, title))
+        save_file(win, title, suggested, resume)       -> resume(pick_save(win, title, suggested))
+        ask(win, title, message, buttons, resume)      -> resume(ask_user(win, title, message, buttons))
+      }
+    } with Shell {
+      open_path(path, resume)   -> resume(shim.motu_shell_open(path))
+      reveal_path(path, resume) -> resume(shim.motu_shell_reveal(path))
+    }
+  } with Clipboard {
+    set_text(text, resume) -> resume(shim.motu_clipboard_set_text(text))
+    text(resume)           -> resume(clipboard_text())
+  }

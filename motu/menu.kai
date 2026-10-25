@@ -1,0 +1,47 @@
+#[doc("""
+The menu bar as a value. An item's id comes back as `Menu(id)` when it is
+chosen; an item whose id is a standard action (`undo`, `redo`, `cut`, `copy`,
+`paste`, `select-all`, `quit`, `close-window`, `fullscreen`, `minimize`)
+gets the platform's own behaviour. A key is one character, upper case
+meaning shift; the primary modifier is implied.
+""")]
+import motu.shim
+
+#[doc("One entry in a menu.")]
+pub type MenuItem
+  = Item(String, String, String)
+  | Checked(String, String, String, Bool)
+  | Disabled(String, String, String)
+  | Separator
+  | Submenu(String, [MenuItem])
+
+#[doc("A top-level menu: its title and its items.")]
+pub type Menu = { title: String, items: [MenuItem] }
+
+fn put(item: MenuItem) : Unit / Ffi = match item {
+  Item(id, title, key)        -> shim.motu_menu_item(id, title, key, 0)
+  Checked(id, title, key, on) -> shim.motu_menu_item(id, title, key, if on { 2 } else { 0 })
+  Disabled(id, title, key)    -> shim.motu_menu_item(id, title, key, 1)
+  Separator                   -> shim.motu_menu_separator()
+  Submenu(title, items)       -> {
+    shim.motu_menu_begin(title)
+    items |! put
+    shim.motu_menu_end()
+  }
+}
+
+#[doc("Replaces the menu bar with `menus`; on macOS the application menu stays first.")]
+pub fn install(menus: [Menu]) : Unit / Ffi = {
+  menus |! (m => put(Submenu(m.title, m.items)))
+  shim.motu_menu_install()
+}
+
+#[doc("The Edit menu with the standard text actions, so copy, paste and undo reach the page.")]
+pub fn edit_menu() : Menu = Menu {
+  title: "Edit",
+  items: [
+    Item("undo", "Undo", "z"), Item("redo", "Redo", "Z"), Separator,
+    Item("cut", "Cut", "x"), Item("copy", "Copy", "c"), Item("paste", "Paste", "v"),
+    Item("select-all", "Select All", "a"),
+  ],
+}

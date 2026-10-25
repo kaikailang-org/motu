@@ -4,3 +4,4 @@ dist/
 kai.lock
 .kai/
 .DS_Store
+.kai-cache/
