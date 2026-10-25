@@ -314,8 +314,11 @@ static void scheme_respond(void *req, unsigned code, const char *reason, const c
   void *resp = webkit_uri_scheme_response_new(stream, (int64_t)len);
   webkit_uri_scheme_response_set_status(resp, code, reason);
   webkit_uri_scheme_response_set_content_type(resp, mime);
-  /* The page lives on motu://app; without this its fetches of motu://files fail CORS. */
+  /* The page lives on motu://app; without this its fetches of motu://files fail CORS.
+   * These headers replace the response's own, so they repeat its content type:
+   * WebAssembly streaming compilation refuses anything but application/wasm. */
   void *headers = soup_message_headers_new(SOUP_HEADERS_RESPONSE);
+  soup_message_headers_append(headers, "Content-Type", mime);
   soup_message_headers_append(headers, "Access-Control-Allow-Origin", "motu://app");
   webkit_uri_scheme_response_set_http_headers(resp, headers);
   webkit_uri_scheme_request_finish_with_response(req, resp);
