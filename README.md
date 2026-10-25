@@ -5,7 +5,10 @@ kaikai backend and a user interface drawn by the system webview, in one
 process. Tauri-shaped: the operating system ships the browser engine, so an
 application does not bundle one.
 
-> **Status:** plan. No code yet. See [`docs/plan.md`](docs/plan.md).
+> **Status:** stage 1 in progress on macOS; the Linux shim is in review. The
+> plan is [`docs/plan.md`](docs/plan.md), the user guide [`docs/guide.md`](docs/guide.md).
+> Examples: `hello`, `md-viewer`, `file-finder`, `notes`, and `book`, the
+> Scrivener-class writing studio.
 
 What sets it apart:
 

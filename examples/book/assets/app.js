@@ -530,6 +530,7 @@ document.addEventListener('keydown', (e) => {
 /* ---------- start, or run the self-test ---------- */
 
 if (location.hash.startsWith('#selftest=')) selftest(decodeURIComponent(location.hash.slice(10)));
+else if (location.hash.startsWith('#open=')) openProject(() => motu.invoke('open', { path: decodeURIComponent(location.hash.slice(6)) }));
 else showWelcome();
 
 async function selftest(dir) {
