@@ -1,6 +1,9 @@
 name: macos
 
 on:
+  push:
+    branches: [main]
+    paths: ['c/**', 'motu/**', 'examples/**', 'kai.toml', '.github/workflows/macos.yml']
   workflow_dispatch:
 
 jobs:
@@ -20,7 +23,7 @@ jobs:
           sw_vers
           sysctl -n machdep.cpu.brand_string
           kai build examples/hello/main.kai -o build/hello
-          kai build examples/book/main.kai -o build/book
+          for ex in md-viewer md-to-epub file-finder notes book; do kai build examples/$ex/main.kai -o build/$ex; done
 
       - name: Start to first paint; the first launch finds WebKit cold on this fresh machine
         id: launch
@@ -37,6 +40,16 @@ jobs:
           mkdir -p "$RUNNER_TEMP/book"
           MOTU_PAGE="index.html#selftest=$RUNNER_TEMP/book" perl -e "alarm 120; exec @ARGV" ./build/book | tee book.txt
           ! grep -E '^FAIL' book.txt
+          MOTU_PAGE="index.html#selftest=$PWD/tests/data/harbour.md|$RUNNER_TEMP/md.pdf" perl -e "alarm 60; exec @ARGV" ./build/md-viewer | tee md.txt
+          grep -E '^h1=Chapter One: The Harbour \| words=3420 \| footnotes=3 \| pdf=written$' md.txt
+          C=$PWD/tests/data/chapters
+          MOTU_PAGE="index.html#selftest=$C/1-arrival.md,$C/2-island.md,$C/3-notes.md||$RUNNER_TEMP/out.epub" perl -e "alarm 60; exec @ARGV" ./build/md-to-epub | tee epub.txt
+          grep -E '^chapters=3-notes / The Island / Arrival \| progress=6 \| Wrote' epub.txt
+          mkdir -p "$RUNNER_TEMP/notes"
+          MOTU_PAGE="index.html#selftest=$RUNNER_TEMP/notes" perl -e "alarm 60; exec @ARGV" ./build/notes | tee notes.txt
+          grep -F 'refused: path leaves the project' notes.txt
+          MOTU_PAGE="index.html#selftest=$PWD" perl -e "alarm 60; exec @ARGV" ./build/file-finder | tee ff.txt
+          grep -E '^([0-9]+) found in [0-9]+ ms \| \1 shown$' ff.txt
 
       - name: Backtrace
         if: failure()

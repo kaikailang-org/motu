@@ -2,6 +2,10 @@
  * plain C and the frameworks load with dlopen instead of link flags. */
 #ifdef __APPLE__
 
+/* ucontext needs the XSI interfaces; _DARWIN_C_SOURCE keeps the rest visible. */
+#define _XOPEN_SOURCE 700
+#define _DARWIN_C_SOURCE 1
+
 #include "motu.h"
 
 #include <dispatch/dispatch.h>
@@ -15,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 /* The Objective-C runtime is loaded with dlopen like the frameworks, so the
@@ -766,9 +771,38 @@ void motu_window_close(int64_t win) {
   });
 }
 
-void motu_run(void) {
+static void run_loop(void) {
   MSG(void, BOOL)(g_app, SEL_("activateIgnoringOtherApps:"), YES);
   MSG(void)(g_app, SEL_("run"));
+}
+
+/* JavaScriptCore aborts when it starts a VM on a stack outside the thread's own
+ * bounds, and kaikai runs main on a fiber stack. So the event loop runs on the
+ * unused low part of the main thread's own stack; the top keeps the frames that
+ * started the fiber. */
+#define NATIVE_RESERVED_TOP (1024 * 1024)
+#define NATIVE_GUARD (64 * 1024)
+
+static ucontext_t g_fiber_ctx, g_loop_ctx;
+
+void motu_run(void) {
+  pthread_t self = pthread_self();
+  char *top = pthread_get_stackaddr_np(self);
+  size_t size = pthread_get_stacksize_np(self);
+  char *here = (char *)&self;
+  if ((here < top && here > top - size) || size <= NATIVE_RESERVED_TOP + NATIVE_GUARD + 512 * 1024) {
+    run_loop();
+    return;
+  }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  getcontext(&g_loop_ctx);
+  g_loop_ctx.uc_stack.ss_sp = top - size + NATIVE_GUARD;
+  g_loop_ctx.uc_stack.ss_size = size - NATIVE_GUARD - NATIVE_RESERVED_TOP;
+  g_loop_ctx.uc_link = &g_fiber_ctx;
+  makecontext(&g_loop_ctx, run_loop, 0);
+  swapcontext(&g_fiber_ctx, &g_loop_ctx);
+#pragma clang diagnostic pop
 }
 
 void motu_quit(void) {
