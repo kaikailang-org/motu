@@ -1,7 +1,14 @@
-#[doc("Compile: the manuscript, in binder order, out as Markdown, HTML or PDF.")]
+#[doc("Compile: the manuscript, in binder order, out as Markdown, HTML, PDF, EPUB 3 or Word.")]
+import time
+import encoding.hex
+import random_secure
 import encoding.json
 import encoding.json_bind
 import motu.desktop
+import motu.docx
+import motu.epub
+import motu.markdown
+import motu.zip
 import motu.markdown_html
 import motu.project
 import examples.book.commands
@@ -13,7 +20,7 @@ pub type Options = { format: String, titles: Bool, title_page: Bool }
 #[doc("One piece of the manuscript: its title, its depth under the manuscript, and its Markdown body.")]
 pub type Part = { title: String, depth: Int, body: String }
 
-fn depth_of(b: Book, n: Node) : Int =
+fn depth_of(b: model.Book, n: Node) : Int =
   if n.parent == model.MANUSCRIPT or n.parent == "" { 1 } else {
     match b.nodes |> list.find(x => x.id == n.parent) {
       Some(p) -> 1 + depth_of(b, p)
@@ -27,7 +34,7 @@ fn body_of(n: Node) : String / Project = match Project.read(model.doc_path(n.id)
 }
 
 #[doc("The manuscript's documents and folders in reading order, with each document's body read.")]
-pub fn parts(b: Book, progress: (Int, Int) -> Unit / e) : [Part] / Project + e = {
+pub fn parts(b: model.Book, progress: (Int, Int) -> Unit / e) : [Part] / Project + e = {
   let nodes = model.manuscript_order(b)
   let total = list.length(nodes)
   list.enumerate(nodes) | (p => {
@@ -39,11 +46,11 @@ pub fn parts(b: Book, progress: (Int, Int) -> Unit / e) : [Part] / Project + e =
 fn heading(depth: Int, title: String) : String =
   "#{string.repeat("#", if depth > 6 { 6 } else { depth })} #{title}\n\n"
 
-fn title_page_md(b: Book) : String =
+fn title_page_md(b: model.Book) : String =
   if b.author == "" { "# #{b.title}\n\n" } else { "# #{b.title}\n\n*#{b.author}*\n\n" }
 
 #[doc("The whole manuscript as one Markdown text.")]
-pub fn markdown_of(b: Book, ps: [Part], o: Options) : String = {
+pub fn markdown_of(b: model.Book, ps: [Part], o: Options) : String = {
   let front = if o.title_page { title_page_md(b) } else { "" }
   let pieces = ps | (p => {
     let h = if o.titles { heading(if o.title_page { p.depth + 1 } else { p.depth }, p.title) } else { "" }
@@ -59,8 +66,32 @@ fn css(print: Bool) : String = if print {
 }
 
 #[doc("The manuscript as one HTML document.")]
-pub fn html_of(b: Book, md: String, print: Bool) : String =
+pub fn html_of(b: model.Book, md: String, print: Bool) : String =
   "<!doctype html>\n<html lang=\"#{markdown_html.escape(if b.language == "" { "en" } else { b.language })}\"><head><meta charset=\"utf-8\"><title>#{markdown_html.escape(b.title)}</title><style>#{css(print)}</style></head><body>\n#{markdown_html.render(md)}</body></html>\n"
+
+# One EPUB chapter per document; a folder becomes a chapter holding only its title.
+fn chapters(ps: [Part]) : [Chapter] =
+  ps | (p => Chapter { title: p.title, body: if p.body == "" { "" } else { markdown_html.render(p.body) } })
+
+fn write_epub(b: model.Book, ps: [Part], out: String) : Result[String, String] / File + Clock + SecureRandom = {
+  let meta = Metadata {
+    title: b.title, author: b.author, language: if b.language == "" { "en" } else { b.language },
+    identifier: "urn:motu:#{hex.encode(random_secure.bytes(16))}", date: time.now(),
+  }
+  match epub.write_file(out, epub.book(meta, chapters(ps))) {
+    Ok(_)  -> Ok(out)
+    Err(e) -> Err(e)
+  }
+}
+
+fn write_docx(b: model.Book, md: String, out: String) : Result[String, String] / File + Clock = {
+  let now = time.now()
+  let parts = docx.parts(Info { title: b.title, author: b.author, language: b.language }, markdown.parse(md))
+  match zip.write_file(out, parts | (p => zip.text(p.fst, p.snd, Deflated, now))) {
+    Ok(_)  -> Ok(out)
+    Err(e) -> Err(e)
+  }
+}
 
 fn extension(format: String) : String = match format {
   "md"   -> "md"
@@ -75,7 +106,7 @@ fn write_out(path: String, text: String) : Result[String, String] / File + Ffi =
   }
 
 #[doc("Compiles the open project to `out`, reporting progress to window `win`.")]
-pub fn compile(win: Int, o: Options, out: String) : Result[JsonValue, String] / Project + Desktop + File + Ffi =
+pub fn compile(win: Int, o: Options, out: String) : Result[JsonValue, String] / Project + Desktop + File + Ffi + Clock + SecureRandom =
   match commands.load() {
     Err(e) -> Err(e)
     Ok(b)  -> {
@@ -85,6 +116,8 @@ pub fn compile(win: Int, o: Options, out: String) : Result[JsonValue, String] / 
         "md"   -> write_out(out, md)
         "html" -> write_out(out, html_of(b, md, false))
         "pdf"  -> if Desktop.print_pdf(html_of(b, md, true), "motu://files/", out) { Ok(out) } else { Err("printing failed") }
+        "epub" -> write_epub(b, ps, out)
+        "docx" -> write_docx(b, md, out)
         other  -> Err("cannot compile to #{other} yet")
       }
       match written {
@@ -95,5 +128,5 @@ pub fn compile(win: Int, o: Options, out: String) : Result[JsonValue, String] / 
   }
 
 #[doc("The file name a compile suggests: the book's title and the format's extension.")]
-pub fn suggested_name(b: Book, format: String) : String =
+pub fn suggested_name(b: model.Book, format: String) : String =
   "#{if b.title == "" { "Book" } else { b.title }}.#{extension(format)}"

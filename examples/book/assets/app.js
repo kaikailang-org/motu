@@ -512,6 +512,7 @@ motu.on('files-dropped', async (paths) => {
 
 async function closeSafely() {
   await flushAll();
+  if (S.root) { try { await call('backup'); } catch (e) { /* a failed backup must not keep the window open */ } }
   await motu.invoke('close-window');
 }
 
@@ -589,6 +590,8 @@ async function selftest(dir) {
       if (img && !img.complete) await new Promise((res) => { img.onload = img.onerror = res; });
       check('research image loads', !!img && img.naturalWidth > 0, img ? img.naturalWidth : 'no img');
     }
+    const zipPath = await call('backup');
+    check('backup', typeof zipPath === 'string' && zipPath.endsWith('.zip'), zipPath);
     for (const format of ['md', 'html', 'epub', 'docx', 'pdf']) {
       try {
         const path = await call('compile', { format, titles: true, title_page: true, out: `${dir}/out.${format}` });

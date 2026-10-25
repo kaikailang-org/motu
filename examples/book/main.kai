@@ -10,6 +10,9 @@ import motu.desktop
 import motu.menu
 import motu.project
 import motu.shim
+import motu.zip
+import time
+import date.rfc3339
 import examples.book.commands
 import examples.book.compile
 import examples.book.model
@@ -75,9 +78,39 @@ fn base_name(path: String) : String = match string.last_index_of(path, "/") {
   None    -> path
 }
 
+# --- backups: the whole bundle zipped into the data directory, the newest five kept ---
+
+fn relative(root: String, path: String) : String =
+  string.byte_slice(path, string.byte_length(root) + 1, string.byte_length(path) - string.byte_length(root) - 1) ?? path
+
+fn entry_of(root: String, name: String, path: String, now: WallTime) : [Entry] / File =
+  match file.read_bytes(path) {
+    Ok(bytes) -> [zip.deflated("#{name}/#{relative(root, path)}", bytes, now)]
+    Err(_)    -> []
+  }
+
+fn prune(dir_path: String, name: String, keep: Int) : Unit / File = {
+  let mine = list.sort(dir.list_dir(dir_path) |? (n => string.starts_with(n, "#{name}-") and string.ends_with(n, ".zip")))
+  list.take(mine, list.length(mine) - keep) |! (n => file.delete("#{dir_path}/#{n}") |> ignore)
+}
+
+fn backup(root: String) : Result[JsonValue, String] / Desktop + File + Clock = {
+  let now = time.now()
+  let name = string.drop_suffix(base_name(root), ".book") ?? base_name(root)
+  let home = "#{data_home()}/backups"
+  dir.create_dir(home) |> ignore
+  let files = dir.walk(root) |? (p => match file.metadata(p) { Ok(m) -> m.is_file; Err(_) -> false })
+  let entries = files || (p => entry_of(root, base_name(root), p, now))
+  let out = "#{home}/#{name}-#{string.replace(rfc3339.format(WallTime { secs: now.secs, nanos: 0 }), ":", "-")}.zip"
+  match zip.write_file(out, entries) {
+    Err(e) -> Err(e)
+    Ok(_)  -> { prune(home, name, 5); Ok(JStr(out)) }
+  }
+}
+
 # --- commands ---
 
-fn compile_to(c: Call) : Result[JsonValue, String] / Project + Desktop + Dialog + File + Ffi = {
+fn compile_to(c: Call) : Result[JsonValue, String] / Project + Desktop + Dialog + File + Ffi + Clock + SecureRandom = {
   let o = Options { format: arg_text(c, "format"), titles: json.as_bool(app.arg(c, "titles")) ?? true, title_page: json.as_bool(app.arg(c, "title_page")) ?? true }
   let out = match app.arg_string(c, "out") {
     Some(p) -> Some(p)
@@ -127,6 +160,7 @@ fn command(c: Call) : Result[JsonValue, String] / Desktop + Dialog + Shell + Cli
   }
   "create"      -> create_at(arg_text(c, "path"), arg_text(c, "title"), arg_text(c, "author"))
   "close-window" -> { Desktop.close_window(c.win); Ok(JNull) }
+  "backup"      -> backup(arg_text(c, "root"))
   "fullscreen"  -> { Desktop.set_fullscreen(c.win, json.as_bool(app.arg(c, "on")) ?? false); Ok(JNull) }
   "reveal"      -> { Shell.reveal_path(arg_text(c, "path")); Ok(JNull) }
   "open-file"   -> { Shell.open_path(arg_text(c, "path")); Ok(JNull) }
