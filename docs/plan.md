@@ -216,10 +216,10 @@ A writing studio for long books, modelled on Scrivener:
 | the project as a bundle of files | a documented bundle layout (below) and recent-projects list in the application data directory | `fs`, `encoding.toml` |
 | project search | `motu.search`: a full-text index in memory, rebuilt from the files when a project opens | none |
 | EPUB, DOCX and backups | zip writer: stored entries and CRC-32 for EPUB, deflate for backups | Motu: `motu.zip`, `motu.deflate`, `motu.crc32` |
-| compile reads the manuscript | Markdown parser to a syntax tree (CommonMark plus footnotes) | kaikai stdlib or an ecosystem package (missing) |
+| compile reads the manuscript | Markdown parser to a syntax tree (CommonMark plus footnotes) | Motu: `motu.markdown` |
 | EPUB and DOCX contents | XML writer with escaping; the EPUB 3 package | Motu: `motu.xml`, `motu.epub` |
-| PDF | print the compiled HTML through the webview to a PDF file | shim (`createPDF` on macOS, a print operation to file on GTK) (R) |
-| spelling | the engine's spell checker on editable text | WKWebView native; enabled per context on WebKitGTK (R) |
+| PDF | print the compiled HTML through the webview to a PDF file | shim: a print operation to file on both platforms, paginated (M) |
+| spelling | the engine's spell checker on editable text | shim: WebKit's spelling default on macOS, the user's locale on WebKitGTK; CI counts the marks on both (M) |
 | images dropped on the binder | file drop on the window, delivered as paths | shim |
 | open a research file in its own application, show it in the file manager | `motu.shell`: open with the default application, reveal in Finder or the file manager | shim |
 | paste from a word processor | the engine's clipboard, plus `motu.clipboard` for text from the backend; turning pasted HTML into Markdown is the application's | shim |
@@ -353,7 +353,8 @@ Answers, measured (M) on macOS 26.6.2 (Apple M4 Pro) and on the GitHub
 4. In part. A kaikai page built with `--target=wasm32-browser` runs in
    WKWebView on macOS 26.6.2: that WebKit has exception handling with exnref.
    A page that spawns a fiber does not: there is no JSPI, and the host says
-   so instead of failing silently. Not yet measured on WebKitGTK. So stage 1
+   so instead of failing silently. WebKitGTK on the Linux runner answers the
+   same (`tests/wasm-page`, in CI). So stage 1
    pages are JavaScript, as decided, and kaikai pages wait for JSPI in the
    system WebKit.
 
