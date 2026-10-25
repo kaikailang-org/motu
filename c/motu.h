@@ -111,15 +111,18 @@ void motu_print_pdf(void *reply, const char *html, const char *base_url, const c
  * false through motu_on_reply. For tests and screenshots. */
 void motu_snapshot(void *reply, int64_t win, const char *out_path);
 
-/* --- callbacks, implemented by the kaikai side --- */
+/* --- callbacks, implemented by the kaikai side ---
+ * Weak, so a program that links the shim but never opens a window (a test
+ * binary) links without them; any program that calls motu_run defines them. */
+#define MOTU_CALLBACK __attribute__((weak))
 
-extern void motu_on_message(void *ud, int64_t win, const char *json);
+extern MOTU_CALLBACK void motu_on_message(void *ud, int64_t win, const char *json);
 /* kind: "close-requested", "closed", "quit-requested", "focus", "blur",
  * "resize". */
-extern void motu_on_window_event(void *ud, int64_t win, const char *kind);
-extern void motu_on_menu(void *ud, const char *id);
+extern MOTU_CALLBACK void motu_on_window_event(void *ud, int64_t win, const char *kind);
+extern MOTU_CALLBACK void motu_on_menu(void *ud, const char *id);
 /* `paths`: a JSON array of the dropped files. */
-extern void motu_on_drop(void *ud, int64_t win, const char *paths);
-extern void motu_on_reply(void *reply, const char *json);
+extern MOTU_CALLBACK void motu_on_drop(void *ud, int64_t win, const char *paths);
+extern MOTU_CALLBACK void motu_on_reply(void *reply, const char *json);
 
 #endif
