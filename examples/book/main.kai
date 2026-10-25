@@ -96,6 +96,7 @@ fn in_project(c: Call) : Result[JsonValue, String] / Project + Desktop + Dialog 
   "compile"      -> compile_to(c)
   "load"         -> match commands.load() { Ok(b) -> Ok(model.book_json(b)); Err(e) -> Err(e) }
   "stats"        -> commands.stats()
+  "metas"        -> commands.metas()
   "add"          -> commands.add(arg_text(c, "parent"), arg_text(c, "kind"), arg_text(c, "title"), arg_int(c, "index"))
   "rename"       -> commands.rename(arg_text(c, "id"), arg_text(c, "title"))
   "move"         -> commands.move(arg_text(c, "id"), arg_text(c, "parent"), arg_int(c, "index"))

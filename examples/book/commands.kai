@@ -84,6 +84,15 @@ pub fn stats() : Result[JsonValue, String] / Project = match load() {
   }
 }
 
+#[doc("Every text document's metadata and word count, in one answer.")]
+pub fn metas() : Result[JsonValue, String] / Project = match load() {
+  Err(e) -> Err(e)
+  Ok(b)  -> Ok(JObj((b.nodes |? (n => n.kind == "doc")) | (n => {
+    let (m, body) = read_doc(n)
+    (n.id, JObj([("meta", model.meta_json(m)), ("words", JNum(word_total(body)))]))
+  })))
+}
+
 #[doc("Adds a node: a folder, or a document with an empty file.")]
 pub fn add(parent: String, kind: String, title: String, index: Int) : Result[JsonValue, String] / Project + SecureRandom = {
   let id = new_id()

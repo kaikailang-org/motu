@@ -309,10 +309,14 @@ async function corkboard(parent, folder) {
 
 async function outliner(parent, folder) {
   if (!folder) return;
+  await flushAll();
+  const metas = await call('metas');
   const rows = [];
   for (const n of descendants(folder.id)) {
-    const d = n.kind === 'doc' ? await loadDoc(n.id) : null;
-    const w = d ? (S.words[n.id] ?? words(d.body)) : '';
+    const cached = S.docs.get(n.id);
+    const m = n.kind === 'doc' ? metas[n.id] : null;
+    const d = m ? { meta: cached ? cached.meta : m.meta } : null;
+    const w = m ? (S.words[n.id] ?? m.words) : '';
     const t = d ? d.meta.target : 0;
     rows.push(el('tr', { ondblclick: () => { S.view = 'editor'; syncViewButtons(); select(n.id); } },
       el('td', {}, ' '.repeat(2 * (ancestors(n.id).length - ancestors(folder.id).length - 1)) + (n.title || 'Untitled')),
@@ -532,6 +536,7 @@ document.addEventListener('keydown', (e) => {
 if (location.hash.startsWith('#selftest=')) selftest(decodeURIComponent(location.hash.slice(10)));
 else if (location.hash.startsWith('#open=')) openProject(() => motu.invoke('open', { path: decodeURIComponent(location.hash.slice(6)) }));
 else if (location.hash.startsWith('#shots=')) shots(decodeURIComponent(location.hash.slice(7)));
+else if (location.hash.startsWith('#bench=')) bench(decodeURIComponent(location.hash.slice(7)));
 else showWelcome();
 
 async function selftest(dir) {
@@ -611,4 +616,24 @@ async function shots(arg) {
   S.split = null; document.body.classList.add('composing'); await renderMain(); await shot('composition');
   document.body.classList.remove('composing');
   await motu.invoke('motu.report', 'shots done');
+}
+
+async function bench(arg) {
+  const [path, dir] = arg.split('|');
+  const out = [];
+  const time = async (name, f) => { const t0 = performance.now(); const r = await f(); out.push(`${name}: ${(performance.now() - t0).toFixed(0)} ms`); return r; };
+  window.onerror = (m) => motu.invoke('motu.report', `JS ERROR ${m}`);
+  await time('open project (load, stats, first chapter)', () => openProject(() => motu.invoke('open', { path })));
+  out.push(`manuscript words: ${S.manuscript}`);
+  await time('word counts (stats)', () => call('stats'));
+  await time('search "harbour lights"', () => call('search', { query: 'harbour lights' }));
+  await time('select a chapter', () => select(docsUnder(MANUSCRIPT)[200].id));
+  S.view = 'outliner';
+  await time('outliner of the manuscript', () => select(MANUSCRIPT));
+  S.view = 'editor';
+  for (const format of ['md', 'html', 'epub', 'docx', 'pdf']) {
+    try { await time(`compile ${format}`, () => call('compile', { format, titles: true, title_page: true, out: `${dir}/bench.${format}` })); }
+    catch (e) { out.push(`compile ${format}: ${e.message}`); }
+  }
+  await motu.invoke('motu.report', out.join('\n'));
 }
