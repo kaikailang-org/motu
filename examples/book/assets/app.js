@@ -56,6 +56,8 @@ async function flushOne(key) {
   const d = S.docs.get(id);
   if (!d) return;
   if (what === 'notes') { await call('save-notes', { id, text: d.notes }); status('Saved'); return; }
+  const n = node(id);
+  if (n) d.meta.title = n.title;
   const r = await call('save', { id, meta: d.meta, body: d.body });
   if (typeof r === 'number') { S.words[id] = r; refreshTargets(); }
   else { S.book = r; renderBinder(); }
