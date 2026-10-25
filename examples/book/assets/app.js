@@ -574,6 +574,16 @@ async function selftest(dir) {
     check('outliner', $$('table.outline tbody tr').length === 2);
     S.view = 'editor'; S.scrivenings = true; await select(first);
     check('scrivenings', $$('.cm-editor').length === 2, $$('.cm-editor').length);
+    await motu.invoke('motu.snapshot', { out: `${dir}/shot.png` });
+    S.book = await call('import', { paths: [`${dir}/shot.png`] });
+    const pic = kids(RESEARCH).find((n) => n.kind === 'research');
+    check('import research', !!pic && pic.file.startsWith('research/'));
+    if (pic) {
+      S.view = 'editor'; await select(pic.id);
+      const img = $('.research img');
+      if (img && !img.complete) await new Promise((res) => { img.onload = img.onerror = res; });
+      check('research image loads', !!img && img.naturalWidth > 0, img ? img.naturalWidth : 'no img');
+    }
     for (const format of ['md', 'html', 'epub', 'docx', 'pdf']) {
       try {
         const path = await call('compile', { format, titles: true, title_page: true, out: `${dir}/out.${format}` });
