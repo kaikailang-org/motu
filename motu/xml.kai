@@ -1,0 +1,92 @@
+#[doc("""
+A small XML writer: escaping, and a tree of elements, attributes, text
+and trusted raw markup rendered to a string. Valid XHTML is the main
+use, so an element with no children closes itself (`<br/>`), and
+rendering adds no whitespace of its own.
+
+`escape` serves text and attribute values alike: it replaces the five
+markup characters and drops the C0 control characters XML 1.0 forbids
+(everything below U+0020 except tab, line feed and carriage return).
+""")]
+
+#[doc("An attribute: its name and its unescaped value.")]
+pub type Attr = { name: String, value: String }
+
+#[doc("A node: an element with attributes and children, escaped text, or raw markup written as is.")]
+pub type Node = Element(String, [Attr], [Node]) | Text(String) | Raw(String)
+
+#[doc("An attribute named `name` with value `value`.")]
+pub fn attr(name: String, value: String) : Attr = Attr { name: name, value: value }
+
+#[doc("An element named `name` with attributes `attrs` and children `children`.")]
+pub fn element(name: String, attrs: [Attr], children: [Node]) : Node = Element(name, attrs, children)
+
+#[doc("A text node; its content is escaped when rendered.")]
+pub fn text(s: String) : Node = Text(s)
+
+#[doc("Markup inserted as is; the caller vouches that it is well-formed.")]
+pub fn raw(s: String) : Node = Raw(s)
+
+# ---- Escaping ---------------------------------------------------
+
+fn replacement(b: Int) : String = match b {
+  38 -> "&amp;"
+  60 -> "&lt;"
+  62 -> "&gt;"
+  34 -> "&quot;"
+  39 -> "&#39;"
+  _  -> ""
+}
+
+fn special(b: Int) : Bool =
+  b == 38 or b == 60 or b == 62 or b == 34 or b == 39 or (b < 32 and b != 9 and b != 10 and b != 13)
+
+fn first_special(s: String, i: Int, n: Int) : Int =
+  if i >= n or special(string_byte_at_int(s, i)) { i } else { first_special(s, i + 1, n) }
+
+fn escape_from(s: String, i: Int, n: Int, start: Int, acc: [String]) : [String] =
+  if i >= n { [string_slice(s, start, n - start), ...acc] } else {
+    let b = string_byte_at_int(s, i)
+    if special(b) { escape_from(s, i + 1, n, i + 1, [replacement(b), string_slice(s, start, i - start), ...acc]) }
+    else { escape_from(s, i + 1, n, start, acc) }
+  }
+
+#[doc("`s` with `&`, `<`, `>`, `\"` and `'` replaced by references and forbidden control characters dropped.")]
+pub fn escape(s: String) : String = {
+  let n = string_length(s)
+  let k = first_special(s, 0, n)
+  if k >= n { s } else { string_concat_all(list_reverse(escape_from(s, k, n, 0, []))) }
+}
+
+# ---- Rendering --------------------------------------------------
+
+fn attrs_to(xs: [Attr], acc: [String]) : [String] = match xs {
+  []        -> acc
+  [a, ...t] -> attrs_to(t, ["\"", escape(a.value), "=\"", a.name, " ", ...acc])
+}
+
+# Pieces accumulate in reverse; `render` joins them once.
+fn node_to(n: Node, acc: [String]) : [String] = match n {
+  Text(s)                  -> [escape(s), ...acc]
+  Raw(s)                   -> [s, ...acc]
+  Element(name, attrs, []) -> ["/>", ...attrs_to(attrs, [name, "<", ...acc])]
+  Element(name, attrs, cs) -> [">", name, "</", ...children_to(cs, [">", ...attrs_to(attrs, [name, "<", ...acc])])]
+}
+
+fn children_to(cs: [Node], acc: [String]) : [String] = match cs {
+  []        -> acc
+  [c, ...t] -> children_to(t, node_to(c, acc))
+}
+
+#[doc("The markup of `n`.")]
+pub fn render(n: Node) : String = string_concat_all(list_reverse(node_to(n, [])))
+
+#[doc("The XML declaration for UTF-8 documents.")]
+pub fn declaration() : String = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+
+#[doc("A complete document: the XML declaration, then `root`.")]
+pub fn document(root: Node) : String = "#{declaration()}\n#{render(root)}\n"
+
+#[doc("A complete document with a doctype line, such as `<!DOCTYPE html>`, between the declaration and `root`.")]
+pub fn document_with(doctype: String, root: Node) : String =
+  "#{declaration()}\n#{doctype}\n#{render(root)}\n"
