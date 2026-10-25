@@ -161,6 +161,7 @@ A writing studio for long books, modelled on Scrivener:
 | PDF | print the compiled HTML through the webview to a PDF file | shim (`createPDF` on macOS, a print operation to file on GTK) (R) |
 | spelling | the engine's spell checker on editable text | WKWebView native; enabled per context on WebKitGTK (R) |
 | images dropped on the binder | file drop on the window, delivered as paths | shim |
+| open a research file in its own application, show it in the file manager | `motu.shell`: open with the default application, reveal in Finder or the file manager | shim |
 | paste from a word processor | the engine's clipboard, plus `motu.clipboard` for text from the backend; turning pasted HTML into Markdown is the application's | shim |
 | unsaved changes on quit | quit request as an event the backend can veto | shim |
 | dark mode | `prefers-color-scheme` in the page; the system appearance as an event | engine; shim |
@@ -214,22 +215,50 @@ Each figure is reported with the machine and the backend it was measured on.
 - Resident memory with that project open.
 - Size of the `.app` bundle and of the AppImage.
 
+### Smaller applications along the way
+
+The book application arrives last. Before it, each milestone closes with a
+small application that uses what the milestone added and runs on both
+platforms. They stay in `examples/` as the shortest working program for each
+capability, and they are what `motu new` offers as templates.
+
+| example | what it is | exercises | milestone |
+|---|---|---|---|
+| `hello` | a window that calls one command and shows the reply | window, scheme, channel | 1 |
+| `md-viewer` | open or drop a Markdown file, read it rendered, reload, print to PDF | menus, dialogs, file drop, appearance, Markdown parser, PDF | 2, 5 |
+| `file-finder` | pick a folder, find files by name and content as you type, open or reveal a result | streamed results, cancellation on each keystroke, `motu.shell` | 3 |
+| `notes` | a folder of Markdown notes with autosave and full-text search | `Project` confinement, atomic writes, autosave timer, kohau search | 4 |
+| `md-to-epub` | a folder of chapters out as EPUB and DOCX, with a progress bar | compile pipeline, zip and XML writers, progress events | 5 |
+| `book` | the Scrivener-class studio above | all of stage 1 | 7 |
+
 ### Milestones
 
 1. **Window and channel.** `motu_run`, one window, the `motu://` scheme, one
    typed command and its reply, on both platforms. This is stage 0 below, and
-   it settles the callback model before anything is built on it.
+   it settles the callback model before anything is built on it. Closes with
+   `hello`.
 2. **Native surface.** Menus, dialogs, close and quit veto, full screen, a
-   second window, file drop, appearance events.
+   second window, file drop, appearance events. Closes with `md-viewer`
+   showing the file as text; it renders once milestone 5 brings the parser.
 3. **Tasks.** Per-window nurseries, cancellation from the page, progress
-   events, an autosave timer.
+   events, an autosave timer, `motu.shell`. Closes with `file-finder`.
 4. **Project.** The `Project` effect and its confinement, atomic writes, the
-   bundle, recent projects, search through kohau.
+   bundle, recent projects, search through kohau. Closes with `notes`.
 5. **Compile.** The Markdown parser, zip and XML writers; out to Markdown,
-   HTML, EPUB 3, DOCX, and PDF through the webview.
-6. **Tooling.** `motu new`, `motu dev`, `motu build`, the macOS bundle and the
-   Linux AppImage.
+   HTML, EPUB 3, DOCX, and PDF through the webview. Closes with `md-to-epub`
+   and `md-viewer` rendering.
+6. **Tooling.** `motu new` (from the examples above), `motu dev`, `motu
+   build`, the macOS bundle and the Linux AppImage.
 7. **The application.** `examples/book` complete, and the measurements above.
+
+### Where the book application lives
+
+In this repository, as `examples/book`, while stage 1 runs: it is Motu's
+acceptance test, one pull request changes the framework and the application
+together, and Motu's CI builds it on every change. It moves to a repository
+of its own when it starts to rest on ahu, or when it becomes a product of its
+own, whichever comes first; otherwise Motu's CI would carry ahu, kohau and
+the editor as its own dependencies. The small examples stay.
 
 ## Stage 0 — the spike that comes first
 
