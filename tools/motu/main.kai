@@ -1,0 +1,201 @@
+#[doc("""
+`motu`: start, run and ship a Motu application.
+
+  motu new <dir> [--template <name>]   a new application from an example
+  motu dev [<dir>]                     build, run, and rebuild on every save
+  motu build [<dir>]                   a macOS .app, or a Linux directory and tarball
+""")]
+import fs.dir
+import fs.file
+import os.args
+import os.env
+import os.process
+import time
+import encoding.toml
+import motu.shim
+
+type App = { root: String, name: String, main: String, assets: String }
+
+fn say(s: String) : Unit / Stderr = Stderr.eprint("motu: #{s}\n")
+
+fn fail(s: String) : Int / Stderr = { say(s); 1 }
+
+fn run_tool(cmd: String, argv: [String]) : Bool / Process = match process.wait(process.start(cmd, argv)) {
+  Ok(Exited(0)) -> true
+  _             -> false
+}
+
+fn parent(path: String) : String = match string.last_index_of(path, "/") {
+  Some(i) -> string.byte_slice(path, 0, i) ?? path
+  None    -> "."
+}
+
+# Built into <repo>/build, the tool finds the templates one level up.
+fn motu_home() : String / Env + Ffi =
+  env.get("MOTU_HOME") ?? parent(shim.motu_exe_dir())
+
+fn name_in(manifest: String) : Option[String] = match toml.decode(manifest) {
+  Some(TTbl(ps)) -> match toml.pairs_get(ps, "name") {
+    Some(TStr(n)) -> Some(n)
+    _             -> None
+  }
+  _ -> None
+}
+
+fn app_at(root: String) : Result[App, String] / File = match read_file("#{root}/kai.toml") {
+  Err(_)       -> Err("no kai.toml in #{root}")
+  Ok(manifest) -> match name_in(manifest) {
+    None       -> Err("kai.toml in #{root} has no name")
+    Some(name) -> Ok(App { root: root, name: name, main: "#{root}/main.kai", assets: "#{root}/assets" })
+  }
+}
+
+# --- new ---
+
+fn copy_tree(from: String, to: String) : Unit / File = {
+  dir.create_dir(to) |> ignore
+  dir.list_dir(from) |! (n => {
+    let src = "#{from}/#{n}"
+    match file.metadata(src) {
+      Ok(m) if m.is_dir -> copy_tree(src, "#{to}/#{n}")
+      Ok(_)             -> match file.read_bytes(src) {
+        Ok(bytes) -> file.write_bytes("#{to}/#{n}", bytes) |> ignore
+        Err(_)    -> ()
+      }
+      Err(_)            -> ()
+    }
+  })
+}
+
+fn manifest_for(name: String, home: String) : String =
+  "name = \"#{name}\"\nversion = \"0.1.0\"\nedition = \"hanga-roa\"\n\n[dependencies]\nmotu = { path = \"#{home}\" }\n"
+
+fn base_name(path: String) : String = match string.last_index_of(path, "/") {
+  Some(i) -> string.byte_slice(path, i + 1, string.byte_length(path) - i - 1) ?? path
+  None    -> path
+}
+
+fn new_app(target: String, template: String) : Int / File + Env + Ffi + Stderr = {
+  let home = motu_home()
+  let src = "#{home}/examples/#{template}"
+  if not file.exists("#{src}/main.kai") {
+    fail("no template '#{template}' in #{home}/examples")
+  } else if file.exists(target) {
+    fail("#{target} already exists")
+  } else {
+    dir.create_dir(target) |> ignore
+    copy_tree("#{src}/assets", "#{target}/assets")
+    let main = ok(read_file("#{src}/main.kai")) ?? ""
+    let fixed = string.replace(main, "examples/#{template}/assets", "assets")
+    write_file("#{target}/main.kai", fixed) |> ignore
+    write_file("#{target}/kai.toml", manifest_for(base_name(target), home)) |> ignore
+    write_file("#{target}/.gitignore", "build/\n.kai-cache/\nkai.lock\n") |> ignore
+    say("created #{target} from '#{template}'; run it with: motu dev #{target}")
+    0
+  }
+}
+
+# --- build ---
+
+fn compile(a: App, out: String) : Bool / Process + File + Stderr = {
+  dir.create_dir("#{a.root}/build") |> ignore
+  say("building #{a.name}")
+  run_tool("kai", ["build", a.main, "-o", out])
+}
+
+fn info_plist(name: String) : String =
+  "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>CFBundleName</key><string>#{name}</string>\n<key>CFBundleDisplayName</key><string>#{name}</string>\n<key>CFBundleIdentifier</key><string>org.kaikailang.motu.#{name}</string>\n<key>CFBundleExecutable</key><string>#{name}</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleShortVersionString</key><string>0.1.0</string>\n<key>NSHighResolutionCapable</key><true/>\n<key>LSMinimumSystemVersion</key><string>13.0</string>\n</dict></plist>\n"
+
+fn bundle_macos(a: App, bin: String) : Int / Process + File + Stderr = {
+  let app = "#{a.root}/build/#{a.name}.app"
+  run_tool("rm", ["-rf", app]) |> ignore
+  dir.create_dir(app) |> ignore
+  dir.create_dir("#{app}/Contents") |> ignore
+  dir.create_dir("#{app}/Contents/MacOS") |> ignore
+  dir.create_dir("#{app}/Contents/Resources") |> ignore
+  run_tool("cp", [bin, "#{app}/Contents/MacOS/#{a.name}"]) |> ignore
+  copy_tree(a.assets, "#{app}/Contents/Resources/assets")
+  write_file("#{app}/Contents/Info.plist", info_plist(a.name)) |> ignore
+  run_tool("codesign", ["--force", "--sign", "-", app]) |> ignore
+  say("wrote #{app}")
+  0
+}
+
+fn bundle_linux(a: App, bin: String) : Int / Process + File + Stderr = {
+  let out = "#{a.root}/build/#{a.name}-linux"
+  run_tool("rm", ["-rf", out]) |> ignore
+  dir.create_dir(out) |> ignore
+  run_tool("cp", [bin, "#{out}/#{a.name}"]) |> ignore
+  copy_tree(a.assets, "#{out}/assets")
+  write_file("#{out}/#{a.name}.desktop", "[Desktop Entry]\nType=Application\nName=#{a.name}\nExec=#{a.name}\nCategories=Utility;\n") |> ignore
+  run_tool("tar", ["-czf", "#{out}.tar.gz", "-C", "#{a.root}/build", "#{a.name}-linux"]) |> ignore
+  say("wrote #{out} and #{out}.tar.gz")
+  0
+}
+
+fn build_app(root: String) : Int / Process + File + Stderr = match app_at(root) {
+  Err(e) -> fail(e)
+  Ok(a)  -> {
+    let bin = "#{a.root}/build/#{a.name}-bin"
+    if not compile(a, bin) {
+      fail("build failed")
+    } else if file.exists("/System/Library/Frameworks/AppKit.framework") {
+      bundle_macos(a, bin)
+    } else {
+      bundle_linux(a, bin)
+    }
+  }
+}
+
+# --- dev ---
+
+fn newest(path: String, best: Int) : Int / File = match file.metadata(path) {
+  Ok(m) if m.is_dir -> if string.ends_with(path, "/build") or string.ends_with(path, "/.kai-cache") {
+    best
+  } else {
+    dir.list_dir(path) |> list.foldl(best, (b, n) => newest("#{path}/#{n}", b))
+  }
+  Ok(m)             -> if m.modified.secs > best { m.modified.secs } else { best }
+  Err(_)            -> best
+}
+
+fn wait_for_change(a: App, since: Int) : Unit / File + Clock = {
+  time.sleep(time.millis(400))
+  if newest(a.root, 0) > since { () } else { wait_for_change(a, since) }
+}
+
+fn dev_loop(a: App) : Int / Process + File + Clock + Stderr = {
+  let stamp = newest(a.root, 0)
+  let bin = "#{a.root}/build/#{a.name}-dev"
+  if compile(a, bin) {
+    let child = process.start(bin, [])
+    wait_for_change(a, stamp)
+    say("change seen; restarting")
+    process.kill(child, 15) |> ignore
+    process.wait(child) |> ignore
+  } else {
+    say("build failed; waiting for a fix")
+    wait_for_change(a, stamp)
+  }
+  dev_loop(a)
+}
+
+fn dev(root: String) : Int / Process + File + Clock + Stderr = match app_at(root) {
+  Err(e) -> fail(e)
+  Ok(a)  -> dev_loop(a)
+}
+
+fn template_of(rest: [String]) : String = match rest {
+  ["--template", t, ..._] -> t
+  [_, ...more]            -> template_of(more)
+  []                      -> "hello"
+}
+
+fn main() : Int / Env + File + Process + Clock + Stderr + Ffi = match args.argv() {
+  ["new", target, ...rest] -> new_app(target, template_of(rest))
+  ["dev"]                  -> dev(".")
+  ["dev", root, ..._]      -> dev(root)
+  ["build"]                -> build_app(".")
+  ["build", root, ..._]    -> build_app(root)
+  _                        -> fail("usage: motu new <dir> [--template <name>] | motu dev [<dir>] | motu build [<dir>]")
+}

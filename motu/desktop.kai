@@ -5,7 +5,6 @@ says which of them it uses; `with_desktop` answers all four with the platform.
 """)]
 import actor
 import ffi
-import spawn
 import encoding.json
 import encoding.json_bind
 import motu.shim
