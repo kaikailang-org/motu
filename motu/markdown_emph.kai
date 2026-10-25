@@ -1,0 +1,120 @@
+#[doc("""
+Inline tokens and emphasis. A delimiter run of `*` or `_` is classified
+by CommonMark's flanking rules; `resolve` then pairs closers with the
+nearest compatible opener (the rule of three included), turning the
+delimiters between them back into literal text.
+""")]
+
+import motu.markdown
+import motu.markdown_scan
+
+#[doc("A run of `*` or `_`: its byte, how many remain, how many it began with, and whether it may open or close.")]
+pub(pkg) type Delim = { ch: Int, count: Int, orig: Int, opens: Bool, closes: Bool }
+
+#[doc("An inline token: a finished node or a delimiter run.")]
+pub(pkg) type Tok = TI(Inline) | TD(Delim)
+
+#[doc("What a scanner rule consumed: the offset after it and the tokens it produced, in order.")]
+pub(pkg) type Hit = { next: Int, toks: [Tok] }
+
+type Frame = { d: Delim, items: [Inline] }
+
+type Em = { frames: [Frame], base: [Inline] }
+
+#[doc("A hit producing a single node.")]
+pub(pkg) fn one(next: Int, x: Inline) : Hit = Hit { next: next, toks: [TI(x)] }
+
+#[doc("The delimiter run of byte `b` starting at `i`.")]
+pub(pkg) fn delim_run(s: String, i: Int, b: Int) : Hit = {
+  let r = run_of(s, i, b)
+  let before = cp_class(cp_before(s, i))
+  let after = cp_class(cp_at(s, i + r))
+  let lf = after != 0 and (after != 1 or before != 2)
+  let rf = before != 0 and (before != 1 or after != 2)
+  let d = if b == 42 { Delim { ch: b, count: r, orig: r, opens: lf, closes: rf } }
+          else { Delim { ch: b, count: r, orig: r, opens: lf and (not rf or before == 1),
+                         closes: rf and (not lf or after == 1) } }
+  Hit { next: i + r, toks: [TD(d)] }
+}
+
+#[doc("Pairs delimiter runs into emphasis and merges adjacent text.")]
+pub(pkg) fn resolve(toks: [Tok]) : [Inline] = merge_text(resolve_loop(toks, Em { frames: [], base: [] }), [], [])
+
+fn resolve_loop(toks: [Tok], em: Em) : [Inline] = match toks {
+  []             -> finish(em)
+  [TI(x), ...t]  -> resolve_loop(t, emit(em, x))
+  [TD(d), ...t]  -> resolve_loop(t, if d.closes { close(em, d) } else { open_or_text(em, d) })
+}
+
+fn emit(em: Em, x: Inline) : Em = match em.frames {
+  []           -> Em { frames: [], base: [x, ...em.base] }
+  [f, ...rest] -> Em { frames: [Frame { d: f.d, items: [x, ...f.items] }, ...rest], base: em.base }
+}
+
+fn open_or_text(em: Em, d: Delim) : Em =
+  if d.count == 0 { em }
+  else if d.opens { Em { frames: [Frame { d: d, items: [] }, ...em.frames], base: em.base } }
+  else { emit(em, Text(delim_text(d))) }
+
+fn delim_text(d: Delim) : String = repeat(if d.ch == 42 { "*" } else { "_" }, d.count)
+
+fn close(em: Em, d: Delim) : Em = {
+  let k = find_opener(em.frames, d, 0)
+  if k < 0 { open_or_text(em, d) }
+  else {
+    match collapse(em.frames, k) {
+      []           -> open_or_text(em, d)
+      [f, ...rest] -> pair(f, rest, em.base, d)
+    }
+  }
+}
+
+fn pair(f: Frame, rest: [Frame], base: [Inline], d: Delim) : Em = {
+  let used = if f.d.count >= 2 and d.count >= 2 { 2 } else { 1 }
+  let kids = merge_text(reverse(f.items), [], [])
+  let node = if used == 2 { Strong(kids) } else { Emph(kids) }
+  let em = if f.d.count == used { emit(Em { frames: rest, base: base }, node) }
+           else { Em { frames: [Frame { d: less(f.d, used), items: [node] }, ...rest], base: base } }
+  if d.count == used { em } else { close(em, less(d, used)) }
+}
+
+fn less(d: Delim, k: Int) : Delim =
+  Delim { ch: d.ch, count: d.count - k, orig: d.orig, opens: d.opens, closes: d.closes }
+
+fn find_opener(frames: [Frame], d: Delim, k: Int) : Int = match frames {
+  [] -> -1
+  [f, ...rest] -> if f.d.ch == d.ch and compatible(f.d, d) { k } else { find_opener(rest, d, k + 1) }
+}
+
+fn compatible(o: Delim, c: Delim) : Bool =
+  not ((o.closes or c.opens) and (o.orig + c.orig) % 3 == 0 and not (o.orig % 3 == 0 and c.orig % 3 == 0))
+
+# The `k` frames above the opener turn back into literal text inside it.
+fn collapse(frames: [Frame], k: Int) : [Frame] =
+  if k == 0 { frames }
+  else {
+    let (above, below) = list.split_at(frames, k)
+    match below {
+      []           -> frames
+      [f, ...rest] -> [Frame { d: f.d, items: unwind(reverse(above), f.items) }, ...rest]
+    }
+  }
+
+fn unwind(frames: [Frame], acc: [Inline]) : [Inline] = match frames {
+  []           -> acc
+  [f, ...rest] -> unwind(rest, list_append(f.items, [Text(delim_text(f.d)), ...acc]))
+}
+
+fn finish(em: Em) : [Inline] = reverse(unwind(reverse(em.frames), em.base))
+
+fn merge_text(xs: [Inline], pending: [String], acc: [Inline]) : [Inline] = match xs {
+  [Text(t), ...rest] -> merge_text(rest, [t, ...pending], acc)
+  [x, ...rest]       -> merge_text(rest, [], [x, ...push_text(pending, acc)])
+  []                 -> reverse(push_text(pending, acc))
+}
+
+fn push_text(pending: [String], acc: [Inline]) : [Inline] = match pending {
+  []  -> acc
+  [t] -> [Text(t), ...acc]
+  _   -> [Text(string_concat_all(reverse(pending))), ...acc]
+}

@@ -1,0 +1,102 @@
+#[doc("""
+The inline phase of the Markdown parser. A scan turns the text into
+tokens (literal spans, finished nodes, delimiter runs), which
+`markdown_emph` then pairs into emphasis.
+""")]
+
+import motu.markdown
+import motu.markdown_emph
+import motu.markdown_entity
+import motu.markdown_link
+import motu.markdown_scan
+
+#[doc("Parses the text of a paragraph or heading into inlines.")]
+pub(pkg) fn parse_inline(s: String) : [Inline] = resolve(reverse(scan(s, string_length(s), 0, 0, [])))
+
+fn scan(s: String, n: Int, i: Int, start: Int, toks: [Tok]) : [Tok] =
+  if i >= n { flush(s, start, n, toks) }
+  else {
+    let b = string_byte_at_int(s, i)
+    if b == 10 { line_end(s, n, i, start, toks) }
+    else if not special(b) { scan(s, n, i + 1, start, toks) }
+    else {
+      match hit(s, n, i, b) {
+        Some(h) -> scan(s, n, h.next, h.next, push_all(h.toks, flush(s, start, i, toks)))
+        None    -> scan(s, n, i + 1, start, toks)
+      }
+    }
+  }
+
+fn special(b: Int) : Bool =
+  b == 92 or b == 96 or b == 42 or b == 95 or b == 91 or b == 33 or b == 60 or b == 38
+
+fn flush(s: String, start: Int, end: Int, toks: [Tok]) : [Tok] =
+  if end <= start { toks } else { [TI(Text(cut(s, start, end))), ...toks] }
+
+fn push_all(xs: [Tok], toks: [Tok]) : [Tok] = match xs {
+  []        -> toks
+  [x, ...t] -> push_all(t, [x, ...toks])
+}
+
+fn line_end(s: String, n: Int, i: Int, start: Int, toks: [Tok]) : [Tok] = {
+  let sp = spaces_before(s, i, start, 0)
+  let brk = if sp >= 2 { HardBreak } else { SoftBreak }
+  let j = skip_sp(s, i + 1)
+  scan(s, n, j, j, [TI(brk), ...flush(s, start, i - sp, toks)])
+}
+
+fn spaces_before(s: String, i: Int, start: Int, k: Int) : Int =
+  if i - 1 >= start and string_byte_at_int(s, i - 1) == 32 { spaces_before(s, i - 1, start, k + 1) } else { k }
+
+fn hit(s: String, n: Int, i: Int, b: Int) : Option[Hit] = match b {
+  92 -> escape(s, i)
+  96 -> Some(code_span(s, i))
+  91 -> markdown_link.bracket(s, n, i, false)
+  33 -> if byte_at(s, i + 1) == 91 { markdown_link.bracket(s, n, i + 1, true) } else { None }
+  60 -> markdown_link.angle(s, i)
+  38 -> entity(s, i)
+  _  -> Some(delim_run(s, i, b))
+}
+
+fn escape(s: String, i: Int) : Option[Hit] = {
+  let c = byte_at(s, i + 1)
+  if c == 10 { Some(one(skip_sp(s, i + 2), HardBreak)) }
+  else if is_punct_b(c) { Some(one(i + 2, Text(cut(s, i + 1, i + 2)))) }
+  else { None }
+}
+
+fn entity(s: String, i: Int) : Option[Hit] = match markdown_entity.decode_at(s, i) {
+  Some(p) -> Some(one(p.fst, Text(p.snd)))
+  None    -> None
+}
+
+fn code_span(s: String, i: Int) : Hit = {
+  let r = run_of(s, i, 96)
+  let close = closing_ticks(s, i + r, r)
+  if close < 0 { one(i + r, Text(cut(s, i, i + r))) }
+  else { one(close + r, Code(code_content(cut(s, i + r, close)))) }
+}
+
+#[doc("The offset just past the code span opening at `j`, or past its backtick run when it never closes.")]
+pub(pkg) fn skip_code(s: String, j: Int) : Int = {
+  let r = run_of(s, j, 96)
+  let close = closing_ticks(s, j + r, r)
+  if close < 0 { j + r } else { close + r }
+}
+
+fn closing_ticks(s: String, j: Int, r: Int) : Int = {
+  let k = find_byte(s, 96, j)
+  if k < 0 { -1 }
+  else {
+    let len = run_of(s, k, 96)
+    if len == r { k } else { closing_ticks(s, k + len, r) }
+  }
+}
+
+fn code_content(raw: String) : String = {
+  let c = replace(raw, "\n", " ")
+  let len = string_length(c)
+  if len >= 2 and byte_at(c, 0) == 32 and byte_at(c, len - 1) == 32 and not blank(c) {
+    cut(c, 1, len - 1)
+  } else { c }
+}
