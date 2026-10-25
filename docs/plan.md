@@ -97,7 +97,7 @@ documents (`tools/make-bench-book.py`, run with `#bench=<project>|<dir>`), all (
 
 | step | time |
 |---|---|
-| process start to the page's first call answered (`hello`) | 0.18–0.23 s |
+| process start to first contentful paint, then quit (`hello`, warm file cache) | 0.23–0.28 s; paint 41–48 ms after the page starts |
 | open the project: load, word counts, first chapter | 87–90 ms |
 | word counts of every document | 42 ms |
 | search the project | 168 ms |
@@ -112,6 +112,11 @@ documents (`tools/make-bench-book.py`, run with `#bench=<project>|<dir>`), all (
 
 Linux, GitHub `ubuntu-24.04` runner under Xvfb, native backend:
 
+- Start to first paint, each launch starting its own Xvfb: 6.4 s on the first
+  launch on a fresh runner, 0.7–0.9 s after; first paint 31–36 ms after the
+  page starts (M).
+- AppImages built by `motu build`: `hello` 1.26 MB, the book application
+  1.90 MB; both run from `/` and pass their self-tests (M).
 - Empty command round trip: 343–610 µs (M); GTK runs on a thread of its own there
   (JavaScriptCore refuses a stack it does not own), so each call crosses one more queue.
 - Every example's self-test passes, the book application included (M).
@@ -287,9 +292,9 @@ capability, and they are what `motu new` offers as templates.
    HTML, EPUB 3, DOCX, and PDF through the webview. Closes with `md-to-epub`
    and `md-viewer` rendering.
 6. **Tooling.** `motu new` (from the examples above), `motu dev`, `motu
-   build`, the macOS bundle and a Linux directory with its tarball. Not an
-   AppImage: the shim loads the system's GTK and WebKitGTK, which an AppImage
-   would not carry either, so it would add a tool and gain nothing.
+   build`, the macOS bundle and the Linux AppImage. The AppImage carries the
+   program and its assets; GTK and WebKitGTK stay the system's, loaded at run
+   time.
 7. **The application.** `examples/book` complete, and the measurements above.
 
 ### Where the book application lives
@@ -372,6 +377,12 @@ Each missing kaikai piece becomes an issue in `lnds/kaikai` when its
 milestone starts.
 
 ## Decisions for the owner
+
+Items 1 to 4 were applied with the recommended option while stage 1 was built
+(own shim; HTML/CSS/JavaScript pages; CodeMirror 6; GTK 4 with WebKitGTK
+6.0) and stay open to change. Item 5 is the owner's: the application runs as
+"Book" until it has a name.
+
 
 1. **Shim**: Motu's own per-platform shim (recommended, for the reasons
    above) or `webview/webview` plus a second shim.
