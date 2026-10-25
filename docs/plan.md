@@ -115,6 +115,11 @@ Linux, GitHub `ubuntu-24.04` runner under Xvfb, native backend:
 - Start to first paint, each launch starting its own Xvfb: 6.4 s on the first
   launch on a fresh runner, 0.7–0.9 s after; first paint 31–36 ms after the
   page starts (M).
+- Menus by mouse and by shortcut, checkmarks, the open, save and message
+  dialogs (answers and cancel), a real XDND file drop, shell open and reveal,
+  focus, blur, resize and close requests: driven with real X input under
+  Xvfb and openbox by `tests/interactive`, each asserted in CI (M). Wayland
+  and the desktop portal's dialogs are not covered.
 - AppImages built by `motu build`: `hello` 1.26 MB, the book application
   1.90 MB; both run from `/` and pass their self-tests (M).
 - Empty command round trip: 343–610 µs (M); GTK runs on a thread of its own there
