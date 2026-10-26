@@ -384,6 +384,7 @@ can own the state behind it.
 | C calls kaikai (`extern "C"` with a body), from a GUI thread too | kaikai | shipped (R); verified in stage 0 |
 | Objective-C sources and macOS frameworks in `[native]` | kaikai | not needed: the shims are C over the Objective-C runtime and load their frameworks with `dlopen` (M) |
 | `extern "C"` exports declared in an imported module of a package | kaikai | shipped (lnds/kaikai#3164); `motu.shim` declares the callbacks |
+| the compiler bugs stage 1 ran into: mutual tail calls (with effects, type or effect-row parameters) in constant stack on every backend, a `Vec` in a record field or read through an owned parameter written in place, effect-row aliases in function types, a module cycle reading a field, `Random` seeded from the OS | kaikai | shipped in 0.178.0 (lnds/kaikai#3175–#3179); Motu no longer works around any of them |
 | zip writer (stored + CRC-32; deflate) | Motu | shipped |
 | flush a file to disk (`fsync`) for atomic saves | Motu shim | `motu_fsync_path` (`F_FULLFSYNC` on macOS) |
 | XML writer | Motu | shipped |
