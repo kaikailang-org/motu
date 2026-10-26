@@ -61,8 +61,8 @@ pub fn decode[t](c: Call, decode: (JsonValue, String) -> Result[t, JsonError]) :
 type Running = { win: Int, id: Int, fiber: Fiber[Unit] }
 
 type Handlers[e] = {
-  commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e,
-  events: (Event) -> Unit / Desktop + Dialog + Shell + Clipboard + e,
+  commands: (Call) -> Result[JsonValue, String] / Ui + e,
+  events: (Event) -> Unit / Ui + e,
 }
 
 fn text_of(v: JsonValue) : String = json.as_string(v) ?? ""
@@ -88,7 +88,7 @@ fn builtin(c: Call) : Option[Result[JsonValue, String]] / Stdout + Ffi = match c
 fn snapshot(c: Call) : Result[JsonValue, String] / Desktop =
   Ok(JBool(Desktop.snapshot(c.win, json.as_string(json.get(c.args, "out")) ?? "snapshot.png")))
 
-fn serve[e](commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e, c: Call, home: Pid[Incoming]) : Unit / Spawn + Ffi + Stdout + e = {
+fn serve[e](commands: (Call) -> Result[JsonValue, String] / Ui + e, c: Call, home: Pid[Incoming]) : Unit / Spawn + Ffi + Stdout + e = {
   let r = match builtin(c) {
     Some(answer) -> answer
     None         -> desktop.with_desktop(() => if c.cmd == "motu.snapshot" { snapshot(c) } else { commands(c) })
@@ -177,8 +177,8 @@ needs the main thread.
 """)]
 pub fn run[e](
   cfg: Config,
-  commands: (Call) -> Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + e,
-  events: (Event) -> Unit / Desktop + Dialog + Shell + Clipboard + e,
+  commands: (Call) -> Result[JsonValue, String] / Ui + e,
+  events: (Event) -> Unit / Ui + e,
 ) : Int / Spawn + Ffi + Stdout + File + e = {
   let h = Handlers { commands: commands, events: events }
   let pid = spawn_actor(() => dispatch(h, []))

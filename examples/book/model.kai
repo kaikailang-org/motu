@@ -6,7 +6,6 @@ import encoding.toml
 import encoding.json
 import encoding.json_bind
 import motu.markdown
-import motu.project
 
 #[doc("One entry of the binder: a folder, a text document, or an imported research file.")]
 pub type Node = { id: String, parent: String, kind: String, title: String, file: String }

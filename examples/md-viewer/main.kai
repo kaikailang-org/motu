@@ -1,6 +1,4 @@
-import ffi
 import os.env
-import encoding.json
 import encoding.json_bind
 import motu.app
 import motu.desktop
@@ -8,7 +6,6 @@ import motu.markdown
 import motu.markdown_html
 import motu.markdown_text
 import motu.menu
-import motu.shim
 
 fn dir_of(path: String) : String = match string.last_index_of(path, "/") {
   Some(i) -> string.byte_slice(path, 0, i) ?? "."

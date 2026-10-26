@@ -1,12 +1,9 @@
-import ffi
 import os.env
 import time
-import encoding.json
 import encoding.json_bind
 import motu.app
 import motu.desktop
 import motu.menu
-import motu.shim
 
 fn command(c: Call) : Result[JsonValue, String] / Desktop + Stdout + Clock = match c.cmd {
   "greet"  -> Ok(JStr("Hello, #{app.arg_string(c, "name") ?? "you"}, from kaikai"))

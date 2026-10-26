@@ -1,4 +1,3 @@
-import ffi
 import fs.file
 import os.env
 import time
@@ -16,7 +15,6 @@ import motu.markdown
 import motu.markdown_html
 import motu.markdown_text
 import motu.menu
-import motu.shim
 
 fn base_name(path: String) : String = match string.last_index_of(path, "/") {
   Some(i) -> string.byte_slice(path, i + 1, string.byte_length(path) - i - 1) ?? path

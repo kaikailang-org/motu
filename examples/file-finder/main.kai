@@ -1,13 +1,10 @@
-import ffi
 import os.env
 import fs.dir
 import fs.file
-import encoding.json
 import encoding.json_bind
 import motu.app
 import motu.desktop
 import motu.menu
-import motu.shim
 
 fn hit(c: Call, path: String, line: String) : Unit / Desktop =
   Desktop.emit(c.win, "hit", JObj([("call", JNum(c.id)), ("path", JStr(path)), ("line", JStr(line))]))

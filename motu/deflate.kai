@@ -60,8 +60,7 @@ fn hash(s: St, i: Int) : Int =
   bit_ushr(bit_and(bit_and(vec_get(s.win, i), 0xFFFFFF) * 2654435761, 0xFFFFFFFF), 16)
 
 # `tab` holds the chain heads by hash, then the previous link by position;
-# every entry is a position plus one, and 0 ends a chain. Its readers borrow
-# it (`^`): a read through an owned parameter makes the next write copy it.
+# every entry is a position plus one, and 0 ends a chain.
 fn link(tab: Vec[Int], i: Int, h: Int, old: Int) : Vec[Int] =
   vec_set(vec_set(tab, hsize() + bit_and(i, wmask()), old), h, i + 1)
 

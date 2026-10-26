@@ -6,7 +6,6 @@ import encoding.hex
 import date.rfc3339
 import encoding.json
 import encoding.json_bind
-import motu.app
 import motu.project
 import motu.markdown_text
 import motu.search

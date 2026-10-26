@@ -111,8 +111,11 @@ fn print_to(html: String, base: String, out: String) : Bool / Spawn + Ffi =
 fn menu_state(id: String, enabled: Bool, checked: Bool) : Unit / Ffi =
   shim.motu_menu_set_state(id, flag(not enabled, MENU_DISABLED) + flag(checked, MENU_CHECKED))
 
+#[doc("The four desktop capabilities a command or an event handler may use.")]
+pub type Ui = Desktop + Dialog + Shell + Clipboard
+
 #[doc("Runs `body` with the four desktop capabilities answered by the platform.")]
-pub fn with_desktop[r, e](body: () -> r / Desktop + Dialog + Shell + Clipboard + e) : r / Spawn + Ffi + e =
+pub fn with_desktop[r, e](body: () -> r / Ui + e) : r / Spawn + Ffi + e =
   handle {
     handle {
       handle {

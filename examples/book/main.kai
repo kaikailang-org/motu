@@ -1,4 +1,3 @@
-import ffi
 import fs.dir
 import fs.file
 import os.env
@@ -9,7 +8,6 @@ import motu.app
 import motu.desktop
 import motu.menu
 import motu.project
-import motu.shim
 import motu.zip
 import time
 import date.rfc3339
@@ -147,7 +145,7 @@ fn in_project(c: Call) : Result[JsonValue, String] / Project + Desktop + Dialog 
   other          -> Err("unknown command #{other}")
 }
 
-fn command(c: Call) : Result[JsonValue, String] / Desktop + Dialog + Shell + Clipboard + File + Ffi + Clock + SecureRandom = match c.cmd {
+fn command(c: Call) : Result[JsonValue, String] / Ui + File + Ffi + Clock + SecureRandom = match c.cmd {
   "recent"      -> Ok(JArr(recent() |? (p => file.exists("#{p}/project.toml")) | (p => JStr(p))))
   "open"        -> open_at(arg_text(c, "path"))
   "pick-open"   -> match Dialog.open_folder(c.win, "Open a book project (a .book folder)") {
