@@ -1,6 +1,7 @@
 #[doc("""
 Markdown to a typed syntax tree: CommonMark blocks and inlines plus
-footnotes, with HTML limited to comments. A document may open with a
+footnotes and GitHub's tables and strikethrough, with HTML limited to
+comments. A document may open with a
 TOML front matter block between `+++` lines; `split_front_matter`
 separates it and `front_matter` decodes it.
 """)]
@@ -15,6 +16,7 @@ pub type Inline
   = Text(String)
   | Emph([Inline])
   | Strong([Inline])
+  | Strike([Inline])
   | Code(String)
   | Link([Inline], String, String)
   | Image([Inline], String, String)
@@ -22,7 +24,11 @@ pub type Inline
   | SoftBreak
   | HardBreak
 
-#[doc("A block of a document; list items are lists of blocks and `tight` lists drop paragraph tags.")]
+#[doc("The alignment of a table column, from the colons of its delimiter cell.")]
+#[derive(Eq, Show)]
+pub type Align = AlignNone | AlignLeft | AlignCenter | AlignRight
+
+#[doc("A block of a document; list items are lists of blocks, `tight` lists drop paragraph tags, and a table holds its column alignments, header cells and body rows.")]
 #[derive(Eq, Show)]
 pub type Block
   = Heading(Int, [Inline])
@@ -34,6 +40,7 @@ pub type Block
   | ThematicBreak
   | Comment(String)
   | FootnoteDef(String, [Block])
+  | Table([Align], [[Inline]], [[[Inline]]])
 
 #[doc("A parsed Markdown document.")]
 #[derive(Eq, Show)]

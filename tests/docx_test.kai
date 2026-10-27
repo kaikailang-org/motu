@@ -23,3 +23,14 @@ test "text is escaped" {
   assert string.contains(part(ps, "word/document.xml"), "a &lt; b &amp; c")
   assert string.contains(part(ps, "docProps/core.xml"), "&lt;B&amp;&gt;")
 }
+
+test "tables and strikethrough become Word XML" {
+  let doc = markdown.parse("| a | b |\n|:-:|--:|\n| 1 | ~~2~~ |")
+  let body = part(docx.parts(Info { title: "B", author: "", language: "" }, doc), "word/document.xml")
+  assert string.contains(body, "<w:tbl>")
+  assert string.contains(body, "<w:tblHeader/>")
+  assert string.contains(body, "<w:jc w:val=\"center\"/>")
+  assert string.contains(body, "<w:jc w:val=\"right\"/>")
+  assert string.contains(body, "<w:rPr><w:strike/></w:rPr><w:t xml:space=\"preserve\">2</w:t>")
+  assert string.contains(body, "<w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">a</w:t>")
+}

@@ -1,8 +1,9 @@
 #[doc("""
 Markdown documents as HTML5 fragments. Text and attributes are escaped,
-comments are dropped, headings carry ids from a slug of their text, and
-footnotes are numbered in order of first reference and gathered into a
-closing `<section class="footnotes">` with links back to each reference.
+comments are dropped, headings carry ids from a slug of their text, table
+cells carry their column's alignment as a style, and footnotes are
+numbered in order of first reference and gathered into a closing
+`<section class="footnotes">` with links back to each reference.
 Void elements are written `<br />` so the output is also valid XHTML.
 """)]
 
@@ -84,6 +85,7 @@ fn block(b: Block, st: St) : St = match b {
   ThematicBreak               -> put(st, "<hr />\n")
   Comment(_)                  -> st
   FootnoteDef(_, _)           -> st
+  Table(aligns, head, rows)   -> table(aligns, head, rows, st)
 }
 
 fn ol_open(n: Int) : String = if n == 1 { "<ol>\n" } else { "<ol start=\"#{n}\">\n" }
@@ -105,6 +107,32 @@ fn li_open(item: [Block], tight: Bool) : String = match item {
   [Paragraph(_), ..._] if tight -> "<li>"
   []                            -> "<li>"
   _                             -> "<li>\n"
+}
+
+fn table(aligns: [Align], head: [[Inline]], rows: [[[Inline]]], st: St) : St = {
+  let top = put(tr(aligns, head, "th", put(st, "<table>\n<thead>\n")), "</thead>\n")
+  let body = if list.is_empty(rows) { top } else { put(body_rows(aligns, rows, put(top, "<tbody>\n")), "</tbody>\n") }
+  put(body, "</table>\n")
+}
+
+fn body_rows(aligns: [Align], rows: [[[Inline]]], st: St) : St = match rows {
+  []        -> st
+  [r, ...t] -> body_rows(aligns, t, tr(aligns, r, "td", st))
+}
+
+fn tr(aligns: [Align], cells: [[Inline]], tag: String, st: St) : St =
+  put(cells_html(aligns, cells, tag, put(st, "<tr>\n")), "</tr>\n")
+
+fn cells_html(aligns: [Align], cells: [[Inline]], tag: String, st: St) : St = match (aligns, cells) {
+  ([a, ...at], [c, ...ct]) -> cells_html(at, ct, tag, put(inlines(c, put(st, "<#{tag}#{align_attr(a)}>")), "</#{tag}>\n"))
+  _                        -> st
+}
+
+fn align_attr(a: Align) : String = match a {
+  AlignNone   -> ""
+  AlignLeft   -> " style=\"text-align: left\""
+  AlignCenter -> " style=\"text-align: center\""
+  AlignRight  -> " style=\"text-align: right\""
 }
 
 fn heading(n: Int, xs: [Inline], st: St) : St = {
@@ -144,6 +172,7 @@ fn inline(x: Inline, st: St) : St = match x {
   Text(s)                -> put(st, escape(s))
   Emph(xs)               -> put(inlines(xs, put(st, "<em>")), "</em>")
   Strong(xs)             -> put(inlines(xs, put(st, "<strong>")), "</strong>")
+  Strike(xs)             -> put(inlines(xs, put(st, "<del>")), "</del>")
   Code(s)                -> put2(st, "<code>", escape(s)) |> put(_, "</code>")
   Link(xs, url, title)   -> put(inlines(xs, put(st, link_open(url, title))), "</a>")
   Image(xs, url, title)  -> put(st, image(xs, url, title))

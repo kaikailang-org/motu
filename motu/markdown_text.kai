@@ -48,6 +48,17 @@ fn block_text(b: Block, acc: [String]) : [String] = match b {
   FootnoteDef(_, bs)      -> blocks_text(bs, acc)
   ThematicBreak           -> acc
   Comment(_)              -> acc
+  Table(_, head, rows)    -> rows_text([head, ...rows], acc)
+}
+
+fn rows_text(rows: [[[Inline]]], acc: [String]) : [String] = match rows {
+  []        -> acc
+  [r, ...t] -> rows_text(t, ["\n", ...cells_text(r, acc)])
+}
+
+fn cells_text(cells: [[Inline]], acc: [String]) : [String] = match cells {
+  []        -> acc
+  [c, ...t] -> cells_text(t, ["\t", ...inlines_acc(c, acc)])
 }
 
 fn items_text(items: [[Block]], acc: [String]) : [String] = match items {
@@ -65,6 +76,7 @@ fn inline_text(x: Inline, acc: [String]) : [String] = match x {
   Code(s)           -> [s, ...acc]
   Emph(xs)          -> inlines_acc(xs, acc)
   Strong(xs)        -> inlines_acc(xs, acc)
+  Strike(xs)        -> inlines_acc(xs, acc)
   Link(xs, _, _)    -> inlines_acc(xs, acc)
   Image(xs, _, _)   -> inlines_acc(xs, acc)
   FootnoteRef(_)    -> acc

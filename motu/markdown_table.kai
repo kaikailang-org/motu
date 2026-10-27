@@ -1,0 +1,73 @@
+#[doc("""
+GitHub tables for the block parser: a header row, a delimiter row of
+`---`, `:--`, `--:` or `:-:` cells, then body rows. Both of the first
+two rows hold a `|` and the same number of cells; `\\|` is a literal pipe.
+""")]
+
+import motu.markdown
+import motu.markdown_inline
+import motu.markdown_scan
+
+#[doc("The column alignments and header cells of a table, when `l` is a header row and `next` a delimiter row with as many cells.")]
+pub(pkg) fn head(l: String, next: String) : Option[([Align], [[Inline]])] =
+  if indent_of(l) >= 4 or indent_of(next) >= 4 or not has_pipe(l) or not has_pipe(next) { None }
+  else { delimiters(cells(next), []) |> option.and_then(aligns => with_header(aligns, cells(l))) }
+
+fn with_header(aligns: [Align], hs: [String]) : Option[([Align], [[Inline]])] =
+  if list.length(hs) != list.length(aligns) { None } else { Some((aligns, hs | cell_inlines)) }
+
+#[doc("The cells of a body row, padded or cut to `n`.")]
+pub(pkg) fn row(line: String, n: Int) : [[Inline]] = fit(cells(line) | cell_inlines, n, [])
+
+fn fit(xs: [[Inline]], n: Int, acc: [[Inline]]) : [[Inline]] =
+  if n <= 0 { reverse(acc) }
+  else {
+    match xs {
+      []        -> fit([], n - 1, [[], ...acc])
+      [x, ...t] -> fit(t, n - 1, [x, ...acc])
+    }
+  }
+
+fn cell_inlines(c: String) : [Inline] = markdown_inline.parse_inline(replace(trim(c), "\\|", "|"))
+
+fn has_pipe(s: String) : Bool = find_byte(s, 124, 0) >= 0
+
+# The raw cells of a row: an outer leading and trailing pipe are optional.
+fn cells(line: String) : [String] = {
+  let t = trim(line)
+  let body = if byte_at(t, 0) == 124 { drop_bytes(t, 1) } else { t }
+  match split_cells(body, 0, 0, []) {
+    ["", ...rest] if not is_empty(rest) -> reverse(rest)
+    all -> reverse(all)
+  }
+}
+
+# Splits at unescaped pipes; the cells come out last first.
+fn split_cells(s: String, i: Int, start: Int, acc: [String]) : [String] = {
+  let b = byte_at(s, i)
+  if b < 0 { [cut(s, start, min(i, string_length(s))), ...acc] }
+  else if b == 92 { split_cells(s, i + 2, start, acc) }
+  else if b == 124 { split_cells(s, i + 1, i + 1, [cut(s, start, i), ...acc]) }
+  else { split_cells(s, i + 1, start, acc) }
+}
+
+fn delimiters(cs: [String], acc: [Align]) : Option[[Align]] = match cs {
+  [] -> Some(reverse(acc))
+  [c, ...t] -> match align_of(trim(c)) {
+    Some(a) -> delimiters(t, [a, ...acc])
+    None    -> None
+  }
+}
+
+fn align_of(c: String) : Option[Align] = {
+  let n = string_length(c)
+  let left = byte_at(c, 0) == 58
+  let right = n > 1 and byte_at(c, n - 1) == 58
+  let from = if left { 1 } else { 0 }
+  let to = if right { n - 1 } else { n }
+  if to <= from or run_of(c, from, 45) != to - from { None }
+  else if left and right { Some(AlignCenter) }
+  else if left { Some(AlignLeft) }
+  else if right { Some(AlignRight) }
+  else { Some(AlignNone) }
+}

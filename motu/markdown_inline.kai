@@ -28,7 +28,7 @@ fn scan(s: String, n: Int, i: Int, start: Int, toks: [Tok]) : [Tok] =
   }
 
 fn special(b: Int) : Bool =
-  b == 92 or b == 96 or b == 42 or b == 95 or b == 91 or b == 33 or b == 60 or b == 38
+  b == 92 or b == 96 or b == 42 or b == 95 or b == 91 or b == 33 or b == 60 or b == 38 or b == 126
 
 fn flush(s: String, start: Int, end: Int, toks: [Tok]) : [Tok] =
   if end <= start { toks } else { [TI(Text(cut(s, start, end))), ...toks] }

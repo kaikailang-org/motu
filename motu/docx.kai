@@ -1,7 +1,8 @@
 #[doc("""
 Word documents (Office Open XML) from parsed Markdown: headings, paragraphs,
-emphasis, quotes, lists, code, scene breaks and footnotes. `parts` gives the
-package's files as (path, text); zip them, `[Content_Types].xml` first.
+emphasis, strikethrough, quotes, lists, code, tables, scene breaks and
+footnotes. `parts` gives the package's files as (path, text); zip them,
+`[Content_Types].xml` first.
 """)]
 import motu.markdown
 import motu.markdown_html
@@ -10,9 +11,11 @@ import motu.markdown_text
 #[doc("A book's title and author, for the document properties.")]
 pub type Info = { title: String, author: String, language: String }
 
-type Run = { text: String, bold: Bool, italic: Bool, code: Bool }
-
 type Note = { label: String, id: Int }
+
+type Fmt = { bold: Bool, italic: Bool, strike: Bool }
+
+const PLAIN : Fmt = Fmt { bold: false, italic: false, strike: false }
 
 fn esc(s: String) : String = markdown_html.escape(s)
 
@@ -23,30 +26,59 @@ fn note_id(notes: [Note], label: String) : Int = match notes |> list.find(n => s
   None    -> 0
 }
 
-fn run_xml(text: String, bold: Bool, italic: Bool, code: Bool) : String = {
-  let props = (if bold { "<w:b/>" } else { "" }) ++ (if italic { "<w:i/>" } else { "" })
+fn run_xml(text: String, f: Fmt, code: Bool) : String = {
+  let props = (if f.bold { "<w:b/>" } else { "" }) ++ (if f.italic { "<w:i/>" } else { "" })
+    ++ (if f.strike { "<w:strike/>" } else { "" })
     ++ (if code { "<w:rFonts w:ascii=\"Menlo\" w:hAnsi=\"Menlo\"/>" } else { "" })
   let rpr = if props == "" { "" } else { "<w:rPr>#{props}</w:rPr>" }
   "<w:r>#{rpr}<w:t xml:space=\"preserve\">#{esc(text)}</w:t></w:r>"
 }
 
-fn inlines_xml(xs: [Inline], notes: [Note], bold: Bool, italic: Bool) : String =
-  string.join(xs | (x => inline_xml(x, notes, bold, italic)), "")
+fn inlines_xml(xs: [Inline], notes: [Note], f: Fmt) : String =
+  string.join(xs | (x => inline_xml(x, notes, f)), "")
 
-fn inline_xml(x: Inline, notes: [Note], bold: Bool, italic: Bool) : String = match x {
-  Text(s)           -> run_xml(s, bold, italic, false)
-  Emph(kids)        -> inlines_xml(kids, notes, bold, true)
-  Strong(kids)      -> inlines_xml(kids, notes, true, italic)
-  Code(s)           -> run_xml(s, bold, italic, true)
-  Link(kids, _, _)  -> inlines_xml(kids, notes, bold, italic)
-  Image(alt, _, _)  -> run_xml("[#{markdown_text.inlines_text(alt)}]", bold, italic, false)
+fn inline_xml(x: Inline, notes: [Note], f: Fmt) : String = match x {
+  Text(s)           -> run_xml(s, f, false)
+  Emph(kids)        -> inlines_xml(kids, notes, Fmt { ...f, italic: true })
+  Strong(kids)      -> inlines_xml(kids, notes, Fmt { ...f, bold: true })
+  Strike(kids)      -> inlines_xml(kids, notes, Fmt { ...f, strike: true })
+  Code(s)           -> run_xml(s, f, true)
+  Link(kids, _, _)  -> inlines_xml(kids, notes, f)
+  Image(alt, _, _)  -> run_xml("[#{markdown_text.inlines_text(alt)}]", f, false)
   FootnoteRef(l)    -> {
     let id = note_id(notes, l)
-    if id == 0 { run_xml("[^#{l}]", bold, italic, false) }
+    if id == 0 { run_xml("[^#{l}]", f, false) }
     else { "<w:r><w:rPr><w:rStyle w:val=\"FootnoteReference\"/></w:rPr><w:footnoteReference w:id=\"#{id}\"/></w:r>" }
   }
-  SoftBreak         -> run_xml(" ", bold, italic, false)
+  SoftBreak         -> run_xml(" ", f, false)
   HardBreak         -> "<w:r><w:br/></w:r>"
+}
+
+# --- tables ---
+
+# The width of the text block on an A4 page with 1440-twip margins.
+const TEXT_WIDTH : Int = 9026
+
+fn table_xml(aligns: [Align], head: [[Inline]], rows: [[[Inline]]], notes: [Note]) : String = {
+  let n = list.length(aligns)
+  let w = TEXT_WIDTH / (if n == 0 { 1 } else { n })
+  let line = "w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\""
+  let borders = string.join(["top", "left", "bottom", "right", "insideH", "insideV"] | (e => "<w:#{e} #{line}/>"), "")
+  let grid = string.join(aligns | (a => "<w:gridCol w:w=\"#{w}\"/>"), "")
+  "<w:tbl><w:tblPr><w:tblW w:w=\"5000\" w:type=\"pct\"/><w:tblBorders>#{borders}</w:tblBorders></w:tblPr><w:tblGrid>#{grid}</w:tblGrid>"
+    ++ row_xml(aligns, head, notes, w, true)
+    ++ string.join(rows | (r => row_xml(aligns, r, notes, w, false)), "")
+    ++ "</w:tbl><w:p/>"
+}
+
+fn row_xml(aligns: [Align], cells: [[Inline]], notes: [Note], w: Int, header: Bool) : String = {
+  let trpr = if header { "<w:trPr><w:tblHeader/></w:trPr>" } else { "" }
+  let f = Fmt { ...PLAIN, bold: header }
+  let tcs = string.join(list.zip(aligns, cells) | (p => {
+    let jc = match p.fst { AlignCenter -> "center"; AlignRight -> "right"; _ -> "left" }
+    "<w:tc><w:tcPr><w:tcW w:w=\"#{w}\" w:type=\"dxa\"/></w:tcPr><w:p><w:pPr><w:spacing w:after=\"0\"/><w:jc w:val=\"#{jc}\"/></w:pPr>#{inlines_xml(p.snd, notes, f)}</w:p></w:tc>"
+  }), "")
+  "<w:tr>#{trpr}#{tcs}</w:tr>"
 }
 
 # --- blocks ---
@@ -55,21 +87,22 @@ fn para(style: String, body: String) : String =
   if style == "" { "<w:p>#{body}</w:p>" } else { "<w:p><w:pPr><w:pStyle w:val=\"#{style}\"/></w:pPr>#{body}</w:p>" }
 
 fn item_xml(marker: String, blocks: [Block], notes: [Note], depth: Int) : String = match blocks {
-  [Paragraph(xs), ...rest] -> para("ListParagraph", run_xml(marker, false, false, false) ++ inlines_xml(xs, notes, false, false))
+  [Paragraph(xs), ...rest] -> para("ListParagraph", run_xml(marker, PLAIN, false) ++ inlines_xml(xs, notes, PLAIN))
     ++ string.join(rest | (b => block_xml(b, notes, "ListParagraph", depth + 1)), "")
-  _ -> para("ListParagraph", run_xml(marker, false, false, false)) ++ string.join(blocks | (b => block_xml(b, notes, "ListParagraph", depth + 1)), "")
+  _ -> para("ListParagraph", run_xml(marker, PLAIN, false)) ++ string.join(blocks | (b => block_xml(b, notes, "ListParagraph", depth + 1)), "")
 }
 
 fn block_xml(b: Block, notes: [Note], quote_style: String, depth: Int) : String = match b {
-  Heading(n, xs)            -> para("Heading#{if n > 6 { 6 } else { n }}", inlines_xml(xs, notes, false, false))
-  Paragraph(xs)             -> para(quote_style, inlines_xml(xs, notes, false, false))
+  Heading(n, xs)            -> para("Heading#{if n > 6 { 6 } else { n }}", inlines_xml(xs, notes, PLAIN))
+  Paragraph(xs)             -> para(quote_style, inlines_xml(xs, notes, PLAIN))
   Quote(bs)                 -> string.join(bs | (x => block_xml(x, notes, "Quote", depth)), "")
   BulletList(_, items)      -> string.join(items | (it => item_xml("•\t", it, notes, depth)), "")
   OrderedList(s, _, items)  -> string.join(list.enumerate(items) | (p => item_xml("#{s + p.fst}.\t", p.snd, notes, depth)), "")
-  CodeBlock(_, text)        -> string.join(string.lines(text) | (l => para("Code", run_xml(l, false, false, true))), "")
-  ThematicBreak             -> para("SceneBreak", run_xml("*   *   *", false, false, false))
+  CodeBlock(_, text)        -> string.join(string.lines(text) | (l => para("Code", run_xml(l, PLAIN, true))), "")
+  ThematicBreak             -> para("SceneBreak", run_xml("*   *   *", PLAIN, false))
   Comment(_)                -> ""
   FootnoteDef(_, _)         -> ""
+  Table(aligns, head, rows) -> table_xml(aligns, head, rows, notes)
 }
 
 fn defs(bs: [Block]) : [(String, [Block])] = bs || (b => match b {
