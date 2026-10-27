@@ -1,14 +1,15 @@
 #[doc("""
-Inline tokens and emphasis. A delimiter run of `*` or `_` is classified
-by CommonMark's flanking rules; `resolve` then pairs closers with the
-nearest compatible opener (the rule of three included), turning the
-delimiters between them back into literal text.
+Inline tokens and emphasis. A delimiter run of `*`, `_` or `~~` is
+classified by CommonMark's flanking rules; `resolve` then pairs closers
+with the nearest compatible opener (the rule of three included for `*`
+and `_`), turning the delimiters between them back into literal text.
+Only a run of exactly two tildes strikes through.
 """)]
 
 import motu.markdown
 import motu.markdown_scan
 
-#[doc("A run of `*` or `_`: its byte, how many remain, how many it began with, and whether it may open or close.")]
+#[doc("A run of `*`, `_` or `~`: its byte, how many remain, how many it began with, and whether it may open or close.")]
 pub(pkg) type Delim = { ch: Int, count: Int, orig: Int, opens: Bool, closes: Bool }
 
 #[doc("An inline token: a finished node or a delimiter run.")]
@@ -27,11 +28,16 @@ pub(pkg) fn one(next: Int, x: Inline) : Hit = Hit { next: next, toks: [TI(x)] }
 #[doc("The delimiter run of byte `b` starting at `i`.")]
 pub(pkg) fn delim_run(s: String, i: Int, b: Int) : Hit = {
   let r = run_of(s, i, b)
+  if b == 126 and r != 2 { one(i + r, Text(cut(s, i, i + r))) }
+  else { flanked(s, i, b, r) }
+}
+
+fn flanked(s: String, i: Int, b: Int, r: Int) : Hit = {
   let before = cp_class(cp_before(s, i))
   let after = cp_class(cp_at(s, i + r))
   let lf = after != 0 and (after != 1 or before != 2)
   let rf = before != 0 and (before != 1 or after != 2)
-  let d = if b == 42 { Delim { ch: b, count: r, orig: r, opens: lf, closes: rf } }
+  let d = if b != 95 { Delim { ch: b, count: r, orig: r, opens: lf, closes: rf } }
           else { Delim { ch: b, count: r, orig: r, opens: lf and (not rf or before == 1),
                          closes: rf and (not lf or after == 1) } }
   Hit { next: i + r, toks: [TD(d)] }
@@ -56,7 +62,7 @@ fn open_or_text(em: Em, d: Delim) : Em =
   else if d.opens { Em { frames: [Frame { d: d, items: [] }, ...em.frames], base: em.base } }
   else { emit(em, Text(delim_text(d))) }
 
-fn delim_text(d: Delim) : String = repeat(if d.ch == 42 { "*" } else { "_" }, d.count)
+fn delim_text(d: Delim) : String = repeat(match d.ch { 42 -> "*"; 126 -> "~"; _ -> "_" }, d.count)
 
 fn close(em: Em, d: Delim) : Em = {
   let k = find_opener(em.frames, d, 0)
@@ -72,7 +78,7 @@ fn close(em: Em, d: Delim) : Em = {
 fn pair(f: Frame, rest: [Frame], base: [Inline], d: Delim) : Em = {
   let used = if f.d.count >= 2 and d.count >= 2 { 2 } else { 1 }
   let kids = merge_text(reverse(f.items), [], [])
-  let node = if used == 2 { Strong(kids) } else { Emph(kids) }
+  let node = if d.ch == 126 { Strike(kids) } else if used == 2 { Strong(kids) } else { Emph(kids) }
   let em = if f.d.count == used { emit(Em { frames: rest, base: base }, node) }
            else { Em { frames: [Frame { d: less(f.d, used), items: [node] }, ...rest], base: base } }
   if d.count == used { em } else { close(em, less(d, used)) }
@@ -87,7 +93,7 @@ fn find_opener(frames: [Frame], d: Delim, k: Int) : Int = match frames {
 }
 
 fn compatible(o: Delim, c: Delim) : Bool =
-  not ((o.closes or c.opens) and (o.orig + c.orig) % 3 == 0 and not (o.orig % 3 == 0 and c.orig % 3 == 0))
+  c.ch == 126 or not ((o.closes or c.opens) and (o.orig + c.orig) % 3 == 0 and not (o.orig % 3 == 0 and c.orig % 3 == 0))
 
 # The `k` frames above the opener turn back into literal text inside it.
 fn collapse(frames: [Frame], k: Int) : [Frame] =

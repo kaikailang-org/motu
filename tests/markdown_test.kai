@@ -339,3 +339,104 @@ test "comments inside containers" {
   assert h("- a\n\n  <!-- why -->\n- b") == "<ul>\n<li>\n" ++ p("a") ++ "</li>\n<li>\n" ++ p("b") ++ "</li>\n</ul>\n"
   assert h("> <!-- c -->\n> q") == "<blockquote>\n" ++ p("q") ++ "</blockquote>\n"
 }
+
+# ---- tables ----
+
+fn row(cells: [String]) : String = "<tr>\n" ++ string_concat_all(cells) ++ "</tr>\n"
+
+test "a table has a head and a body" {
+  assert h("| a | b |\n| - | - |\n| 1 | 2 |") ==
+    "<table>\n<thead>\n" ++ row(["<th>a</th>\n", "<th>b</th>\n"]) ++ "</thead>\n<tbody>\n"
+      ++ row(["<td>1</td>\n", "<td>2</td>\n"]) ++ "</tbody>\n</table>\n"
+  assert h("a | b\n--|--") ==
+    "<table>\n<thead>\n" ++ row(["<th>a</th>\n", "<th>b</th>\n"]) ++ "</thead>\n</table>\n"
+}
+
+test "table columns take their alignment from the delimiter row" {
+  match parse("a|b|c|d\n:--|:-:|--:|---\n1|2|3|4").blocks {
+    [Table(aligns, _, _)] -> { assert aligns == [AlignLeft, AlignCenter, AlignRight, AlignNone] }
+    _ -> { assert false }
+  }
+  let out = h("a|b\n:-:|--:\n1|2")
+  assert contains(out, "<th style=\"text-align: center\">a</th>")
+  assert contains(out, "<td style=\"text-align: right\">2</td>")
+}
+
+test "table cells hold inlines and escaped pipes" {
+  assert parse("| x | y |\n|---|---|\n| *e* | `a\\|b` |\n| a \\| b | ~~s~~ |").blocks == [
+    Table([AlignNone, AlignNone], [[Text("x")], [Text("y")]], [
+      [[Emph([Text("e")])], [Code("a|b")]],
+      [[Text("a | b")], [Strike([Text("s")])]],
+    ]),
+  ]
+}
+
+test "short rows are padded and long rows cut" {
+  assert parse("a|b\n-|-\n1\n1|2|3").blocks == [
+    Table([AlignNone, AlignNone], [[Text("a")], [Text("b")]], [[[Text("1")], []], [[Text("1")], [Text("2")]]]),
+  ]
+}
+
+test "a table ends at a blank line or another block" {
+  assert parse("a|b\n-|-\n1|2\n\nafter").blocks == [
+    Table([AlignNone, AlignNone], [[Text("a")], [Text("b")]], [[[Text("1")], [Text("2")]]]),
+    Paragraph([Text("after")]),
+  ]
+  match parse("a|b\n-|-\n1|2\n# H").blocks {
+    [Table(_, _, rows), Heading(1, _)] -> { assert list.length(rows) == 1 }
+    _ -> { assert false }
+  }
+}
+
+test "a table interrupts a paragraph" {
+  match parse("intro\na|b\n-|-").blocks {
+    [Paragraph([Text("intro")]), Table(_, _, [])] -> { assert true }
+    _ -> { assert false }
+  }
+}
+
+test "look-alikes are not tables" {
+  assert h("a | b | c\n--|--\n1|2") == p("a | b | c\n--|--\n1|2")
+  assert h("Title\n---") == "<h2 id=\"title\">Title</h2>\n"
+  assert h("a | b\n-- x --|--") == p("a | b\n-- x --|--")
+}
+
+test "raw HTML in a table cell stays text" {
+  let out = h("| <b>x</b> | y |\n|---|---|\n| <script>z</script> | w |")
+  assert contains(out, "<th>&lt;b&gt;x&lt;/b&gt;</th>")
+  assert contains(out, "<td>&lt;script&gt;z&lt;/script&gt;</td>")
+  assert not contains(out, "<script>")
+}
+
+test "a table inside a list item and a quote" {
+  assert contains(h("- a|b\n  -|-\n  1|2"), "<li>\n<table>")
+  assert contains(h("> a|b\n> -|-"), "<blockquote>\n<table>")
+}
+
+# ---- strikethrough ----
+
+test "two tildes strike through" {
+  assert h("~~gone~~") == p("<del>gone</del>")
+  assert h("a ~~b c~~ d") == p("a <del>b c</del> d")
+  assert parse("~~x~~").blocks == [Paragraph([Strike([Text("x")])])]
+}
+
+test "single and triple tildes stay text" {
+  assert h("~5 km and ~7") == p("~5 km and ~7")
+  assert h("~one~") == p("~one~")
+  assert h("a ~~~x~~~") == p("a ~~~x~~~")
+  assert h("a ~~ b ~~ c") == p("a ~~ b ~~ c")
+  assert h("~~open") == p("~~open")
+  assert h("\\~~x~~") == p("~~x~~")
+}
+
+test "strikethrough nests with emphasis" {
+  assert h("*a ~~b~~ c*") == p("<em>a <del>b</del> c</em>")
+  assert h("~~a **b** c~~") == p("<del>a <strong>b</strong> c</del>")
+  assert h("**~~both~~**") == p("<strong><del>both</del></strong>")
+}
+
+test "tildes in code are literal" {
+  assert h("`~~x~~`") == p("<code>~~x~~</code>")
+  assert h("```\n~~x~~\n```") == "<pre><code>~~x~~\n</code></pre>\n"
+}

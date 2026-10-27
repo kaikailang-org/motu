@@ -216,7 +216,7 @@ A writing studio for long books, modelled on Scrivener:
 | the project as a bundle of files | a documented bundle layout (below) and recent-projects list in the application data directory | `fs`, `encoding.toml` |
 | project search | `motu.search`: a full-text index in memory, rebuilt from the files when a project opens | none |
 | EPUB, DOCX and backups | zip writer: stored entries and CRC-32 for EPUB, deflate for backups | Motu: `motu.zip`, `motu.deflate`, `motu.crc32` |
-| compile reads the manuscript | Markdown parser to a syntax tree (CommonMark plus footnotes) | Motu: `motu.markdown` |
+| compile reads the manuscript | Markdown parser to a syntax tree (CommonMark plus footnotes, GFM tables and strikethrough) | Motu: `motu.markdown` |
 | EPUB and DOCX contents | XML writer with escaping; the EPUB 3 package | Motu: `motu.xml`, `motu.epub` |
 | PDF | print the compiled HTML through the webview to a PDF file | shim: a print operation to file on both platforms, paginated (M) |
 | spelling | the engine's spell checker on editable text | shim: WebKit's spelling default on macOS, the user's locale on WebKitGTK; CI counts the marks on both (M) |
@@ -388,7 +388,7 @@ can own the state behind it.
 | zip writer (stored + CRC-32; deflate) | Motu | shipped |
 | flush a file to disk (`fsync`) for atomic saves | Motu shim | `motu_fsync_path` (`F_FULLFSYNC` on macOS) |
 | XML writer | Motu | shipped |
-| Markdown parser (CommonMark plus footnotes) to a syntax tree | Motu | shipped: `motu.markdown` |
+| Markdown parser (CommonMark plus footnotes, GFM tables and strikethrough) to a syntax tree | Motu | shipped: `motu.markdown` |
 | Windows runtime | kaikai | not started; spike numbers above |
 
 Each missing kaikai piece becomes an issue in `lnds/kaikai` when its

@@ -7,6 +7,7 @@ strips its markers and indentation, and parses them again.
 import motu.markdown
 import motu.markdown_inline
 import motu.markdown_scan
+import motu.markdown_table
 
 type Parsed = { blocks: [Block], loose: Bool }
 
@@ -98,13 +99,35 @@ fn setext_level(line: String) : Int = {
   else if c == 61 { 1 } else { 2 }
 }
 
-fn paragraph(l: String, rest: [String]) : Step = para_loop(rest, [trim_left(l)])
+fn paragraph(l: String, rest: [String]) : Step = match rest {
+  [x, ...more] -> match markdown_table.head(l, x) {
+    Some((aligns, header)) -> table_rows(aligns, header, more, [])
+    None                   -> para_loop(rest, [trim_left(l)])
+  }
+  [] -> para_loop(rest, [trim_left(l)])
+}
 
 fn para_loop(rest: [String], acc: [String]) : Step = match rest {
   [x, ...more] if not blank(x) and setext_level(x) > 0 ->
     Step { block: Heading(setext_level(x), inline_of(para_text(acc))), rest: more }
+  [x, ...more] if not blank(x) and opens_table(x, more) ->
+    Step { block: Paragraph(inline_of(para_text(acc))), rest: rest }
   [x, ...more] if not blank(x) and not interrupts(x) -> para_loop(more, [trim_left(x), ...acc])
   _ -> Step { block: Paragraph(inline_of(para_text(acc))), rest: rest }
+}
+
+fn opens_table(x: String, more: [String]) : Bool = match more {
+  [y, ..._] -> match markdown_table.head(x, y) {
+    Some(_) -> true
+    None    -> false
+  }
+  [] -> false
+}
+
+fn table_rows(aligns: [Align], header: [[Inline]], rest: [String], acc: [[[Inline]]]) : Step = match rest {
+  [x, ...more] if not blank(x) and not interrupts(x) ->
+    table_rows(aligns, header, more, [markdown_table.row(x, list.length(aligns)), ...acc])
+  _ -> Step { block: Table(aligns, header, reverse(acc)), rest: rest }
 }
 
 fn para_text(acc: [String]) : String = trim_right(string_join(reverse(acc), "\n"))

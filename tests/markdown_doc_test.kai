@@ -62,6 +62,11 @@ test "word count skips front matter and comments but counts footnotes" {
   assert word_count("") == 0
 }
 
+test "table cells and struck text count as words" {
+  assert plain_text(parse("| a | b |\n|---|---|\n| one | ~~two~~ |")) == "a\tb\t\none\ttwo\t\n"
+  assert word_count("| head | more |\n|---|---|\n| x y | z |\n\nSome ~~old~~ text.") == 8
+}
+
 # ---- whole documents ----
 
 test "the sample chapter renders" {
