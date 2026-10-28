@@ -1,6 +1,7 @@
 import fs.dir
 import fs.file
 import motu.project
+import spawn
 
 fn scratch() : String / File = {
   let d = "#{dir.temp_dir()}/motu-project-test"
@@ -28,7 +29,21 @@ test "a write is atomic and leaves no temporary file" {
     Project.read("ch1.md")
   })
   assert r == Ok("second")
-  assert not file.exists("#{root}/.ch1.md.motu-tmp")
+  assert not (dir.list_dir(root) |> list.any(n => string.ends_with(n, ".motu-tmp")))
+}
+
+test "writes of one file at once each succeed and leave one whole text" {
+  let d = "#{scratch()}/concurrent"
+  dir.create_dir(d) |> ignore
+  let full = "#{d}/notes.json"
+  let texts = string.chars("abcdefghijklmnop") | (c => string.repeat("#{c};", 4000))
+  let results = nursery { n ->
+    let fibers = texts | (t => n.spawn(() => project.write_atomic(full, t)))
+    fibers | (f => n.await(f))
+  }
+  assert results |> list.all(r => r == Ok(()))
+  assert list.contains(texts, ok(read_file(full)) ?? "")
+  assert dir.list_dir(d) == ["notes.json"]
 }
 
 test "a command cannot read outside the project" {

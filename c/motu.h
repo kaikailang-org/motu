@@ -96,6 +96,8 @@ void motu_clipboard_set_text(const char *text);
 void motu_clipboard_get_text(void *reply);
 /* [any] Flushes a written file to the disk; 0 on success. */
 int64_t motu_fsync_path(const char *path);
+/* [any] A suffix no other call in this process returns: the pid and a counter. */
+const char *motu_unique_suffix(void);
 /* [any] The platform's per-user data directory, without the app name. */
 const char *motu_data_dir(void);
 /* [any] The directory holding the running executable. */
