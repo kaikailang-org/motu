@@ -49,7 +49,8 @@ pub(pkg) fn resolve(toks: [Tok]) : [Inline] = merge_text(resolve_loop(toks, Em {
 fn resolve_loop(toks: [Tok], em: Em) : [Inline] = match toks {
   []             -> finish(em)
   [TI(x), ...t]  -> resolve_loop(t, emit(em, x))
-  [TD(d), ...t]  -> resolve_loop(t, if d.closes { close(em, d) } else { open_or_text(em, d) })
+  # `closes` is read before the branches take `d`: read in the condition, it kept `d` alive.
+  [TD(d), ...t]  -> { let closes = d.closes; resolve_loop(t, if closes { close(em, d) } else { open_or_text(em, d) }) }
 }
 
 fn emit(em: Em, x: Inline) : Em = match em.frames {
