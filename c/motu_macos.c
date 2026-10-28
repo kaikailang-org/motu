@@ -485,6 +485,13 @@ int64_t motu_fsync_path(const char *path) {
   return r == 0 ? 0 : -1;
 }
 
+const char *motu_unique_suffix(void) {
+  static _Atomic unsigned long long next;
+  static _Thread_local char out[48];
+  snprintf(out, sizeof out, "%ld-%llu", (long)getpid(), next++);
+  return out;
+}
+
 const char *motu_data_dir(void) {
   static char dir[1024];
   const char *home = getenv("HOME");

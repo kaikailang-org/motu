@@ -41,6 +41,7 @@ extern "C" pub fn motu_shell_reveal(path: String) : Unit / Ffi
 extern "C" pub fn motu_clipboard_set_text(text: String) : Unit / Ffi
 extern "C" pub fn motu_clipboard_get_text(reply: Userdata) : Unit / Ffi
 extern "C" pub fn motu_fsync_path(path: String) : Int / Ffi
+extern "C" pub fn motu_unique_suffix() : String / Ffi
 extern "C" pub fn motu_data_dir() : String / Ffi
 extern "C" pub fn motu_exe_dir() : String / Ffi
 extern "C" pub fn motu_snapshot(reply: Userdata, win: Int, out_path: String) : Unit / Ffi

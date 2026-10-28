@@ -43,18 +43,22 @@ fn split_last(path: String) : (String, String) = match string.last_index_of(path
   None    -> (".", path)
 }
 
-#[doc("Writes `text` to `full` atomically: temporary file, flush, rename.")]
+fn flushed(path: String) : Result[Unit, String] / Ffi =
+  if shim.motu_fsync_path(path) == 0 { Ok(()) } else { Err("could not flush #{path} to the disk") }
+
+# Each write has a temporary file of its own, so writes of one file at once cannot collide.
+fn temp_for(dir: String, name: String) : String / Ffi = "#{dir}/.#{name}.#{shim.motu_unique_suffix()}.motu-tmp"
+
+#[doc("Writes `text` to `full` atomically: a temporary file of its own, flushed, renamed over the target.")]
 pub fn write_atomic(full: String, text: String) : Result[Unit, String] / File + Ffi = {
   let (dir, name) = split_last(full)
-  let tmp = "#{dir}/.#{name}.motu-tmp"
-  match write_file(tmp, text) {
-    Err(e) -> Err(e)
-    Ok(_)  -> if shim.motu_fsync_path(tmp) != 0 {
-      file.delete(tmp) |> ignore
-      Err("could not flush #{tmp} to the disk")
-    } else {
-      file.rename(tmp, full)
-    }
+  let tmp = temp_for(dir, name)
+  let written = write_file(tmp, text)
+    |> result.and_then(done => flushed(tmp))
+    |> result.and_then(done => file.rename(tmp, full))
+  match written {
+    Err(e) -> { file.delete(tmp) |> ignore; Err(e) }
+    Ok(_)  -> { shim.motu_fsync_path(dir) |> ignore; Ok(()) }
   }
 }
 
