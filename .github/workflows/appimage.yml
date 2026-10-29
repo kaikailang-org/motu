@@ -25,7 +25,7 @@ jobs:
 
       - name: Install kai and appimagetool
         run: |
-          curl -fsSL https://raw.githubusercontent.com/kaikailang-org/kaikai/main/install.sh | sh
+          curl -fsSL https://raw.githubusercontent.com/kaikailang-org/kaikai/main/install.sh | KAIKAI_DIST_BASE=https://github.com/kaikailang-org/kaikai/releases/download/v0.184.0 sh
           echo "$HOME/.kaikai/bin" >> "$GITHUB_PATH"
           mkdir -p build
           curl -fsSL -o build/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
