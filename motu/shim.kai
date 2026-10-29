@@ -10,7 +10,7 @@ pub type Incoming
   | Finished(Int, Int)
   | Shutdown
 
-extern "C" pub fn motu_init(ud: Userdata, app_name: String) : Unit / Ffi
+extern "C" pub fn motu_init(ud: Userdata[Pid[Incoming]], app_name: String) : Unit / Ffi
 extern "C" pub fn motu_run() : Unit / Ffi
 extern "C" pub fn motu_quit() : Unit / Ffi
 extern "C" pub fn motu_set_asset_root(root: String) : Unit / Ffi
@@ -32,44 +32,44 @@ extern "C" pub fn motu_menu_end() : Unit / Ffi
 extern "C" pub fn motu_menu_install() : Unit / Ffi
 extern "C" pub fn motu_menu_set_state(id: String, flags: Int) : Unit / Ffi
 
-extern "C" pub fn motu_dialog_open(reply: Userdata, win: Int, title: String, flags: Int, extensions: String) : Unit / Ffi
-extern "C" pub fn motu_dialog_save(reply: Userdata, win: Int, title: String, suggested: String) : Unit / Ffi
-extern "C" pub fn motu_dialog_message(reply: Userdata, win: Int, title: String, message: String, buttons: String) : Unit / Ffi
+extern "C" pub fn motu_dialog_open(reply: Userdata[Pid[String]], win: Int, title: String, flags: Int, extensions: String) : Unit / Ffi
+extern "C" pub fn motu_dialog_save(reply: Userdata[Pid[String]], win: Int, title: String, suggested: String) : Unit / Ffi
+extern "C" pub fn motu_dialog_message(reply: Userdata[Pid[String]], win: Int, title: String, message: String, buttons: String) : Unit / Ffi
 
 extern "C" pub fn motu_shell_open(path: String) : Unit / Ffi
 extern "C" pub fn motu_shell_reveal(path: String) : Unit / Ffi
 extern "C" pub fn motu_clipboard_set_text(text: String) : Unit / Ffi
-extern "C" pub fn motu_clipboard_get_text(reply: Userdata) : Unit / Ffi
+extern "C" pub fn motu_clipboard_get_text(reply: Userdata[Pid[String]]) : Unit / Ffi
 extern "C" pub fn motu_fsync_path(path: String) : Int / Ffi
 extern "C" pub fn motu_unique_suffix() : String / Ffi
 extern "C" pub fn motu_data_dir() : String / Ffi
 extern "C" pub fn motu_exe_dir() : String / Ffi
-extern "C" pub fn motu_snapshot(reply: Userdata, win: Int, out_path: String) : Unit / Ffi
-extern "C" pub fn motu_print_pdf(reply: Userdata, html: String, base_url: String, out_path: String) : Unit / Ffi
+extern "C" pub fn motu_snapshot(reply: Userdata[Pid[String]], win: Int, out_path: String) : Unit / Ffi
+extern "C" pub fn motu_print_pdf(reply: Userdata[Pid[String]], html: String, base_url: String, out_path: String) : Unit / Ffi
 
 # The callbacks the shim calls; each hands its event to the dispatcher's mailbox.
 
-extern "C" pub fn motu_on_message(ud: Userdata, win: Int, json: String) : Unit = {
-  let pid: Pid[Incoming] = take_userdata(ud)
+extern "C" pub fn motu_on_message(ud: Userdata[Pid[Incoming]], win: Int, json: String) : Unit / Ffi = {
+  let pid = take_userdata(ud)
   mailbox_send(pid, PageMessage(win, json))
 }
 
-extern "C" pub fn motu_on_window_event(ud: Userdata, win: Int, kind: String) : Unit = {
-  let pid: Pid[Incoming] = take_userdata(ud)
+extern "C" pub fn motu_on_window_event(ud: Userdata[Pid[Incoming]], win: Int, kind: String) : Unit / Ffi = {
+  let pid = take_userdata(ud)
   mailbox_send(pid, WindowEvent(win, kind))
 }
 
-extern "C" pub fn motu_on_menu(ud: Userdata, id: String) : Unit = {
-  let pid: Pid[Incoming] = take_userdata(ud)
+extern "C" pub fn motu_on_menu(ud: Userdata[Pid[Incoming]], id: String) : Unit / Ffi = {
+  let pid = take_userdata(ud)
   mailbox_send(pid, MenuChosen(id))
 }
 
-extern "C" pub fn motu_on_drop(ud: Userdata, win: Int, paths: String) : Unit = {
-  let pid: Pid[Incoming] = take_userdata(ud)
+extern "C" pub fn motu_on_drop(ud: Userdata[Pid[Incoming]], win: Int, paths: String) : Unit / Ffi = {
+  let pid = take_userdata(ud)
   mailbox_send(pid, Dropped(win, paths))
 }
 
-extern "C" pub fn motu_on_reply(ud: Userdata, json: String) : Unit = {
-  let pid: Pid[String] = take_userdata(ud)
+extern "C" pub fn motu_on_reply(ud: Userdata[Pid[String]], json: String) : Unit / Ffi = {
+  let pid = take_userdata(ud)
   mailbox_send(pid, json)
 }

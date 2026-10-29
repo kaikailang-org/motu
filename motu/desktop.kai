@@ -52,7 +52,7 @@ const MENU_DISABLED : Int = 1
 const MENU_CHECKED : Int = 2
 
 # Starts a platform call that answers through motu_on_reply, and waits for it.
-fn await_reply(start: (Userdata) -> Unit / Ffi) : String / Spawn + Ffi = with_mailbox {
+fn await_reply(start: (Userdata[Pid[String]]) -> Unit / Ffi) : String / Spawn + Ffi = with_mailbox {
   let ud = retain_userdata(Actor.self())
   start(ud)
   let answer: String = Actor.receive()
