@@ -47,6 +47,21 @@ void motu_window_close(int64_t win);
 /* [any] Delivers one JSON value to the page: window.__motu_recv(json). */
 void motu_post(int64_t win, const char *json);
 
+/* --- screens ---
+ * Screens are named as the system names them ("Built-in Retina Display") and
+ * measured in points, x and y from the top left of the primary screen.
+ * MOTU_SCREEN, when set, places every new window on that screen, as
+ * motu_window_to_screen does. GTK 4 leaves placement to the compositor: on
+ * Linux there are no screens to list and windows stay where it puts them. */
+
+/* [any] The screens as a JSON array of {"name", "x", "y", "width", "height",
+ * "primary"}; the primary screen holds the menu bar. */
+const char *motu_screens(void);
+/* [any] Moves the window to the screen named by `screen`, its 1-based number
+ * or part of its name ignoring case, centred and shrunk to fit; 1 when moved,
+ * 0 when no screen matches or the platform cannot place windows. */
+int64_t motu_window_to_screen(int64_t win, const char *screen);
+
 /* --- menus ---
  * The menu bar is built depth-first and replaces the previous one on
  * motu_menu_install. `key` is the accelerator: one character, upper case
