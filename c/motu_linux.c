@@ -711,6 +711,10 @@ int64_t motu_window_new(const char *title, int64_t width, int64_t height) {
   return sync_wait(&s);
 }
 
+/* GTK 4 leaves window placement to the compositor. */
+const char *motu_screens(void) { return "[]"; }
+int64_t motu_window_to_screen(int64_t win, const char *screen) { (void)win; (void)screen; return 0; }
+
 static void load_main(Job *j) { if (valid(j->a)) webkit_web_view_load_uri(g_win[j->a].view, j->s[0]); }
 void motu_window_load(int64_t win, const char *url) { lx_on_ui(lx_job(load_main, 0, win, 0, url, 0, 0)); }
 

@@ -689,6 +689,103 @@ void motu_set_asset_root(const char *root) {
   g_root = strdup(root);
 }
 
+/* --- screens --- */
+
+/* A rect-returning message: objc_msgSend_stret on x86_64, where AppKit returns
+ * structs this size through memory; plain objc_msgSend on arm64. */
+static MotuRect rect_of(id obj, const char *sel) {
+#if defined(__x86_64__)
+  static void *stret;
+  if (!stret) stret = dlsym(RTLD_DEFAULT, "objc_msgSend_stret");
+  return ((MotuRect (*)(id, SEL))stret)(obj, SEL_(sel));
+#else
+  return MSG(MotuRect)(obj, SEL_(sel));
+#endif
+}
+
+static id screen_list(void) { return MSG(id)(CLS("NSScreen"), SEL_("screens")); }
+
+static unsigned long screen_count(id list) { return MSG(unsigned long)(list, SEL_("count")); }
+
+static id screen_at(id list, unsigned long i) { return MSG(id, unsigned long)(list, SEL_("objectAtIndex:"), i); }
+
+static const char *screen_name(id screen) {
+  SEL sel = SEL_("localizedName");
+  return class_respondsToSelector(object_getClass(screen), sel) ? cstr(MSG(id)(screen, sel)) : "";
+}
+
+/* The screen a name or a 1-based number picks, or nil. */
+static id find_screen(const char *wanted) {
+  id list = screen_list();
+  unsigned long n = screen_count(list);
+  char *end;
+  long k = strtol(wanted, &end, 10);
+  if (*end == '\0') return k >= 1 && (unsigned long)k <= n ? screen_at(list, (unsigned long)k - 1) : (id)0;
+  for (unsigned long i = 0; i < n; i++)
+    if (strcasestr(screen_name(screen_at(list, i)), wanted)) return screen_at(list, i);
+  return (id)0;
+}
+
+/* Centres the window in the screen's visible area, shrunk to fit it. */
+static int to_screen(id win, const char *wanted) {
+  id screen = find_screen(wanted);
+  if (!screen) return 0;
+  MotuRect area = rect_of(screen, "visibleFrame"), f = rect_of(win, "frame");
+  f.w = f.w < area.w ? f.w : area.w;
+  f.h = f.h < area.h ? f.h : area.h;
+  f.x = area.x + (area.w - f.w) / 2;
+  f.y = area.y + (area.h - f.h) / 2;
+  MSG(void, MotuRect, BOOL)(win, SEL_("setFrame:display:"), f, YES);
+  return 1;
+}
+
+static void json_string(char *out, size_t cap, const char *s) {
+  size_t n = 0;
+  out[n++] = '"';
+  for (; *s && n + 3 < cap; s++) {
+    if (*s == '"' || *s == '\\') out[n++] = '\\';
+    if ((unsigned char)*s >= 0x20) out[n++] = *s;
+  }
+  out[n++] = '"';
+  out[n] = '\0';
+}
+
+static void screens_main(char *out, size_t cap) {
+  id list = screen_list();
+  unsigned long n = screen_count(list);
+  /* AppKit's y grows upwards from the bottom of the primary screen. */
+  double top = n ? rect_of(screen_at(list, 0), "frame").h : 0;
+  size_t used = (size_t)snprintf(out, cap, "[");
+  for (unsigned long i = 0; i < n && used < cap; i++) {
+    id screen = screen_at(list, i);
+    MotuRect f = rect_of(screen, "frame");
+    char name[256];
+    json_string(name, sizeof name, screen_name(screen));
+    used += (size_t)snprintf(out + used, cap - used,
+        "%s{\"name\":%s,\"x\":%.0f,\"y\":%.0f,\"width\":%.0f,\"height\":%.0f,\"primary\":%s}",
+        i ? "," : "", name, f.x, top - (f.y + f.h), f.w, f.h, i == 0 ? "true" : "false");
+  }
+  if (used < cap) snprintf(out + used, cap - used, "]");
+}
+
+const char *motu_screens(void) {
+  static _Thread_local char out[4096];
+  if (pthread_main_np()) screens_main(out, sizeof out);
+  else {
+    char *buf = out;
+    dispatch_sync(dispatch_get_main_queue(), ^{ screens_main(buf, sizeof out); });
+  }
+  return out;
+}
+
+int64_t motu_window_to_screen(int64_t win, const char *screen) {
+  if (pthread_main_np()) return valid(win) ? to_screen(g_windows[win], screen) : 0;
+  __block int64_t moved = 0;
+  id s = MSG(id)(nsstr(screen), SEL_("copy"));
+  dispatch_sync(dispatch_get_main_queue(), ^{ moved = valid(win) ? to_screen(g_windows[win], cstr(s)) : 0; });
+  return moved;
+}
+
 static int64_t window_new_main(const char *title, int64_t width, int64_t height) {
   int64_t slot = 0;
   for (int64_t i = 1; i <= MOTU_MAX_WINDOWS; i++)
@@ -719,6 +816,8 @@ static int64_t window_new_main(const char *title, int64_t width, int64_t height)
   MSG(void, id)(view, SEL_("registerForDraggedTypes:"), types);
   MSG(void, id)(win, SEL_("setContentView:"), view);
   MSG(void)(win, SEL_("center"));
+  const char *screen = getenv("MOTU_SCREEN");
+  if (screen && *screen) to_screen(win, screen);
   MSG(void, id)(win, SEL_("makeKeyAndOrderFront:"), (id)0);
   g_windows[slot] = win;
   g_views[slot] = view;

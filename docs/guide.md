@@ -88,6 +88,11 @@ a project's images and PDFs.
   its argument and quits. Every example reads `MOTU_PAGE`, so
   `MOTU_PAGE='index.html#selftest' ./build/hello` runs its self-test and prints
   one line.
+- `MOTU_SCREEN` opens every window on another screen, named by its number or
+  part of its name: `MOTU_SCREEN=Built-in ./build/hello` keeps a test run off
+  the screen you are working on. `Desktop.screens()` lists them and
+  `Desktop.move_to_screen(win, screen)` moves a window; on Linux, where GTK 4
+  leaves placement to the compositor, the list is empty and nothing moves.
 - On Linux, `tests/interactive/drive.py` drives `tests/interactive/main.kai`
   with real X input under Xvfb: menus by mouse and shortcut, checkmarks, the
   file and message dialogs, a file dropped from another window, shell open and

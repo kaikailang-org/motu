@@ -24,6 +24,8 @@ extern "C" pub fn motu_window_set_fullscreen(win: Int, on: Int) : Unit / Ffi
 extern "C" pub fn motu_window_focus(win: Int) : Unit / Ffi
 extern "C" pub fn motu_window_close(win: Int) : Unit / Ffi
 extern "C" pub fn motu_post(win: Int, json: String) : Unit / Ffi
+extern "C" pub fn motu_screens() : String / Ffi
+extern "C" pub fn motu_window_to_screen(win: Int, screen: String) : Int / Ffi
 
 extern "C" pub fn motu_menu_begin(title: String) : Unit / Ffi
 extern "C" pub fn motu_menu_item(id: String, title: String, key: String, flags: Int) : Unit / Ffi

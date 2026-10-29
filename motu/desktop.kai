@@ -9,7 +9,17 @@ import encoding.json
 import encoding.json_bind
 import motu.shim
 
-#[doc("Windows, events to the page, menu state, printing, the files served as motu://files/, and the application's own lifetime.")]
+#[doc("""
+A screen as the system names it, in points from the top left of the primary
+screen, the one with the menu bar.
+""")]
+#[derive(Eq, Show, Json)]
+pub type Screen = { name: String, x: Int, y: Int, width: Int, height: Int, primary: Bool }
+
+#[doc("""
+Windows, the screens they go on, events to the page, menu state, printing, the
+files served as motu://files/, and the application's own lifetime.
+""")]
 pub effect Desktop {
   emit(win: Int, name: String, data: JsonValue) : Unit
   open_window(title: String, width: Int, height: Int, page: String) : Int
@@ -18,6 +28,8 @@ pub effect Desktop {
   set_min_size(win: Int, width: Int, height: Int) : Unit
   set_fullscreen(win: Int, on: Bool) : Unit
   focus(win: Int) : Unit
+  screens() : [Screen]
+  move_to_screen(win: Int, screen: String) : Bool
   set_menu_state(id: String, enabled: Bool, checked: Bool) : Unit
   print_pdf(html: String, base_url: String, out_path: String) : Bool
   snapshot(win: Int, out_path: String) : Bool
@@ -62,6 +74,12 @@ fn await_reply(start: (Userdata[Pid[String]]) -> Unit / Ffi) : String / Spawn + 
 
 fn strings_of(text: String) : [String] = match json_decode(text) {
   Some(JArr(xs)) -> xs || (x => match x { JStr(s) -> [s]; _ -> [] })
+  _              -> []
+}
+
+#[doc("The screens in `motu_screens`'s JSON; none when it cannot be read.")]
+pub fn screens_of(text: String) : [Screen] = match json_decode(text) {
+  Some(JArr(xs)) -> xs || (x => match screen_of_json(x, "") { Ok(sc) -> [sc]; Err(_) -> [] })
   _              -> []
 }
 
@@ -127,6 +145,8 @@ pub fn with_desktop[r, e](body: () -> r / Ui + e) : r / Spawn + Ffi + e =
           set_min_size(win, w, h, resume)          -> resume(shim.motu_window_set_min_size(win, w, h))
           set_fullscreen(win, on, resume)          -> resume(shim.motu_window_set_fullscreen(win, flag(on, 1)))
           focus(win, resume)                       -> resume(shim.motu_window_focus(win))
+          screens(resume)                          -> resume(screens_of(shim.motu_screens()))
+          move_to_screen(win, screen, resume)      -> resume(shim.motu_window_to_screen(win, screen) == 1)
           set_menu_state(id, on, checked, resume)  -> resume(menu_state(id, on, checked))
           print_pdf(html, base, out, resume)       -> resume(print_to(html, base, out))
           snapshot(win, out, resume)               -> resume(await_reply(ud => shim.motu_snapshot(ud, win, out)) == "true")
@@ -148,3 +168,10 @@ pub fn with_desktop[r, e](body: () -> r / Ui + e) : r / Spawn + Ffi + e =
     set_text(text, resume) -> resume(shim.motu_clipboard_set_text(text))
     text(resume)           -> resume(clipboard_text())
   }
+
+test "reads the screens the platform lists" {
+  let listed = "[{\"name\":\"Studio Display\",\"x\":0,\"y\":0,\"width\":2048,\"height\":1152,\"primary\":true},{\"name\":\"Built-in Retina Display\",\"x\":-1352,\"y\":170,\"width\":1352,\"height\":878,\"primary\":false}]"
+  assert (screens_of(listed) | (sc => (sc.name, sc.x, sc.primary))) == [("Studio Display", 0, true), ("Built-in Retina Display", -1352, false)]
+  assert screens_of("[]") == []
+  assert screens_of("no") == []
+}
