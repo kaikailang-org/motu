@@ -42,7 +42,7 @@ test "writes of one file at once each succeed and leave one whole text" {
     fibers | (f => n.await(f))
   }
   assert results |> list.all(r => r == Ok(()))
-  assert list.contains(texts, ok(read_file(full)) ?? "")
+  assert list.contains(texts, ok(file.read(full)) ?? "")
   assert dir.list_dir(d) == ["notes.json"]
 }
 

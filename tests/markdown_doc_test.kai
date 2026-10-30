@@ -4,7 +4,7 @@ import motu.markdown
 import motu.markdown_html
 import motu.markdown_text
 
-fn chapter() : String / File = file.read("tests/data/harbour.md")
+fn chapter() : String / File = file.read("tests/data/harbour.md") |> result.unwrap_or("")
 
 # ---- front matter ----
 

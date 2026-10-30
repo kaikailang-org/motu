@@ -41,7 +41,7 @@ fn title_of(path: String, text: String) : String = {
   declared ?? (first_heading(markdown.parse(markdown.split_front_matter(text).snd).blocks) ?? stem(path))
 }
 
-fn describe(path: String) : List[JsonValue] / File = match read_file(path) {
+fn describe(path: String) : List[JsonValue] / File = match file.read(path) {
   Err(_)   -> []
   Ok(text) -> [JObj([
     ("path", JStr(path)),
@@ -50,7 +50,7 @@ fn describe(path: String) : List[JsonValue] / File = match read_file(path) {
   ])]
 }
 
-fn chapter(path: String) : Result[Chapter, String] / File = match read_file(path) {
+fn chapter(path: String) : Result[Chapter, String] / File = match file.read(path) {
   Err(e)   -> Err("#{path}: #{e}")
   Ok(text) -> {
     let body = markdown.split_front_matter(text).snd
@@ -77,7 +77,7 @@ fn manuscript(win: Int, paths: [String]) : Result[String, String] / Desktop + Fi
   let total = list.length(paths)
   let pieces = list.enumerate(paths) | (ip => {
     Desktop.emit(win, "progress", JObj([("done", JNum(ip.fst + 1)), ("total", JNum(total))]))
-    match read_file(ip.snd) {
+    match file.read(ip.snd) {
       Err(e)   -> Err("#{ip.snd}: #{e}")
       Ok(text) -> {
         let body = markdown.split_front_matter(text).snd
@@ -121,7 +121,7 @@ fn make(c: Call) : Result[JsonValue, String] / Desktop + Dialog + File + Clock +
       title, author: app.arg_string(c, "author") ?? "", language: if lang == "" { "en" } else { lang },
       identifier: "urn:motu:#{hex.encode(random_secure.bytes(16))}", date: time.now(),
     }
-    let files = strings(json.get(c.args, "files"))
+    let files = strings((json.get(c.args, "files") ?? JNull))
     let made = if string.ends_with(out, ".docx") {
       match manuscript(c.win, files) {
         Err(e) -> Err(e)
@@ -142,7 +142,7 @@ fn make(c: Call) : Result[JsonValue, String] / Desktop + Dialog + File + Clock +
 
 fn command(c: Call) : Result[JsonValue, String] / Desktop + Dialog + File + Clock + SecureRandom = match c.cmd {
   "add"   -> Ok(JArr(Dialog.open_files(c.win, "Add Markdown files", ["md", "markdown", "txt"], true) || (p => describe(p))))
-  "files" -> Ok(JArr(strings(json.get(c.args, "paths")) || (p => describe(p))))
+  "files" -> Ok(JArr(strings((json.get(c.args, "paths") ?? JNull)) || (p => describe(p))))
   "cover" -> Ok(match Dialog.open_files(c.win, "Choose a cover image", ["png", "jpg", "jpeg", "gif", "webp"], false) { [p, ..._] -> JStr(p); [] -> JNull })
   "make"  -> make(c)
   other   -> Err("unknown command #{other}")

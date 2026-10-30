@@ -18,7 +18,7 @@ fn search_one(c: Call, query: String, path: String) : Int / Desktop + File =
     1
   } else {
     match file.metadata(path) {
-      Ok(m) if m.is_file and m.size < 1000000 -> match read_file(path) {
+      Ok(m) if m.is_file and m.size < 1000000 -> match file.read(path) {
         Ok(text) -> match first_match(text, query) {
           Some(line) -> { hit(c, path, string.trim(line)); 1 }
           None       -> 0

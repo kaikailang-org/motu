@@ -53,7 +53,7 @@ fn temp_for(dir: String, name: String) : String / Ffi = "#{dir}/.#{name}.#{shim.
 pub fn write_atomic(full: String, text: String) : Result[Unit, String] / File + Ffi = {
   let (dir, name) = split_last(full)
   let tmp = temp_for(dir, name)
-  let written = write_file(tmp, text)
+  let written = file.write(tmp, text)
     |> result.and_then(done => flushed(tmp))
     |> result.and_then(done => file.rename(tmp, full))
   match written {
@@ -75,7 +75,7 @@ fn listing(full: String) : Result[[String], String] / File =
 pub fn with_project[r, e](root: String, body: () -> r / Project + e) : r / File + Ffi + e =
   handle { body() } with Project {
     root(resume)             -> resume(root)
-    read(path, resume)       -> resume(under(root, path, full => read_file(full)))
+    read(path, resume)       -> resume(under(root, path, full => file.read(full)))
     write(path, text, resume) -> resume(under(root, path, full => write_atomic(full, text)))
     exists(path, resume)     -> resume(match resolve(root, path) { Ok(full) -> file.exists(full); Err(_) -> false })
     list(path, resume)       -> resume(under(root, path, full => listing(full)))

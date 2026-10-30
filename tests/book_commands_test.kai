@@ -11,8 +11,8 @@ fn scratch(name: String) : String / File = {
   d
 }
 
-fn first_doc(v: JsonValue) : String = match json.get(v, "nodes") {
-  JArr(xs) -> xs |> list.find(x => json.as_string(json.get(x, "kind")) == Some("doc")) |> (o => match o { Some(x) -> json.as_string(json.get(x, "id")) ?? ""; None -> "" })
+fn first_doc(v: JsonValue) : String = match (json.get(v, "nodes") ?? JNull) {
+  JArr(xs) -> xs |> list.find(x => json.as_string((json.get(x, "kind") ?? JNull)) == Some("doc")) |> (o => match o { Some(x) -> json.as_string((json.get(x, "id") ?? JNull)) ?? ""; None -> "" })
   _ -> ""
 }
 
@@ -26,7 +26,7 @@ test "a new project opens, saves a chapter, counts and finds it" {
     let st = ok(commands.stats()) ?? JNull
     let found = ok(commands.find("lights ferry")) ?? JNull
     let renamed = ok(commands.load()) ?? model.fresh("", "", "")
-    (json.as_int(json.get(st, "manuscript")), found == JArr([JStr(id)]), (renamed.nodes |> list.find(n => n.id == id)) |> (o => match o { Some(n) -> n.title; None -> "" }))
+    (json.as_int((json.get(st, "manuscript") ?? JNull)), found == JArr([JStr(id)]), (renamed.nodes |> list.find(n => n.id == id)) |> (o => match o { Some(n) -> n.title; None -> "" }))
   })
   assert r.fst == Some(9)
   assert r.snd
@@ -42,7 +42,7 @@ test "snapshots restore the earlier text" {
     let name = json.as_string(ok(commands.snapshot(id)) ?? JNull) ?? ""
     commands.save(id, m, "second version") |> ignore
     commands.restore(id, name) |> ignore
-    json.as_string(json.get(ok(commands.read(id)) ?? JNull, "body")) ?? ""
+    json.as_string(json.get(ok(commands.read(id)) ?? JNull, "body") ?? JNull) ?? ""
   })
   assert r == "first version"
 }
