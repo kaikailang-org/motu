@@ -45,8 +45,11 @@ pub fn default_event(ev: Event) : Unit / Desktop = match ev {
   _                   -> ()
 }
 
+# A key of a JSON object; `JNull` when absent.
+fn field(v: JsonValue, key: String) : JsonValue = json.get(v, key) ?? JNull
+
 #[doc("An argument of the call by name: `JNull` when absent.")]
-pub fn arg(c: Call, name: String) : JsonValue = json.get(c.args, name)
+pub fn arg(c: Call, name: String) : JsonValue = field(c.args, name)
 
 #[doc("A string argument of the call, if present.")]
 pub fn arg_string(c: Call, name: String) : Option[String] = json.as_string(arg(c, name))
@@ -86,7 +89,7 @@ fn builtin(c: Call) : Option[Result[JsonValue, String]] / Stdout + Ffi = match c
 }
 
 fn snapshot(c: Call) : Result[JsonValue, String] / Desktop =
-  Ok(JBool(Desktop.snapshot(c.win, json.as_string(json.get(c.args, "out")) ?? "snapshot.png")))
+  Ok(JBool(Desktop.snapshot(c.win, json.as_string(field(c.args, "out")) ?? "snapshot.png")))
 
 fn serve[e](commands: (Call) -> Result[JsonValue, String] / Ui + e, c: Call, home: Pid[Incoming]) : Unit / Spawn + Ffi + Stdout + e = {
   let r = match builtin(c) {
@@ -117,7 +120,7 @@ fn cancel_one(r: Running) : Unit / Spawn + Ffi = {
 }
 
 fn call_of(win: Int, m: JsonValue) : Call =
-  Call { win: win, id: int_of(json.get(m, "id")), cmd: text_of(json.get(m, "cmd")), args: json.get(m, "args") }
+  Call { win: win, id: int_of(field(m, "id")), cmd: text_of(field(m, "cmd")), args: field(m, "args") }
 
 fn notify[e](h: Handlers[e], ev: Event) : Unit / Spawn + Ffi + e =
   Spawn.spawn(() => desktop.with_desktop(() => (h.events)(ev))) |> ignore
@@ -132,8 +135,8 @@ fn dispatch[e](h: Handlers[e], running: [Running]) : Unit / Actor[Incoming] + Sp
   match Actor.receive() {
     PageMessage(win, text) -> {
       let m = json_decode(text) ?? JNull
-      let id = int_of(json.get(m, "id"))
-      match text_of(json.get(m, "t")) {
+      let id = int_of(field(m, "id"))
+      match text_of(field(m, "t")) {
         "call" -> {
           let c = call_of(win, m)
           let home = Actor.self()

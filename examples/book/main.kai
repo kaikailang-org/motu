@@ -32,7 +32,7 @@ fn data_home() : String / Desktop + File = {
   d
 }
 
-fn recent() : [String] / Desktop + File = match read_file("#{data_home()}/recent.toml") {
+fn recent() : [String] / Desktop + File = match file.read("#{data_home()}/recent.toml") {
   Ok(text) -> match toml.decode(text) {
     Some(TTbl(ps)) -> match toml.pairs_get(ps, "paths") {
       Some(TArr(xs)) -> xs || (x => match x { TStr(s) -> [s]; _ -> [] })

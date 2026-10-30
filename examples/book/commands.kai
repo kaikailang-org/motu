@@ -251,8 +251,8 @@ pub fn import_files(paths: [String]) : Result[JsonValue, String] / Project + Fil
 #[doc("Saves the book's header: title, author, language, target, labels and statuses.")]
 pub fn save_book(v: JsonValue) : Result[JsonValue, String] / Project = edit(b => Ok(Book {
   ...b,
-  title: json.as_string(json.get(v, "title")) ?? b.title,
-  author: json.as_string(json.get(v, "author")) ?? b.author,
-  language: json.as_string(json.get(v, "language")) ?? b.language,
-  target: json.as_int(json.get(v, "target")) ?? b.target,
+  title: json.as_string((json.get(v, "title") ?? JNull)) ?? b.title,
+  author: json.as_string((json.get(v, "author") ?? JNull)) ?? b.author,
+  language: json.as_string((json.get(v, "language") ?? JNull)) ?? b.language,
+  target: json.as_int((json.get(v, "target") ?? JNull)) ?? b.target,
 }))

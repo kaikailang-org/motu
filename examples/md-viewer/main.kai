@@ -1,3 +1,4 @@
+import fs.file
 import os.env
 import encoding.json_bind
 import motu.app
@@ -16,7 +17,7 @@ fn print_css() : String =
   "<style>body{font:11pt/1.5 Georgia,serif;margin:2cm} h1,h2{page-break-after:avoid} img{max-width:100%} pre{white-space:pre-wrap} .footnotes{font-size:9pt;border-top:1px solid #999;margin-top:2em}</style>"
 
 fn load(path: String) : Result[JsonValue, String] / Desktop + File =
-  match read_file(path) {
+  match file.read(path) {
     Err(e)   -> Err(e)
     Ok(text) -> {
       Desktop.serve_files(dir_of(path))
@@ -30,7 +31,7 @@ fn load(path: String) : Result[JsonValue, String] / Desktop + File =
   }
 
 fn print(c: Call, path: String) : Result[JsonValue, String] / Desktop + Dialog + File =
-  match read_file(path) {
+  match file.read(path) {
     Err(e)   -> Err(e)
     Ok(text) -> {
       let out = app.arg_string(c, "out") ?? (Dialog.save_file(c.win, "Save as PDF", "document.pdf") ?? "")

@@ -131,13 +131,13 @@ pub fn meta_json(m: Meta) : JsonValue = JObj([
   ("keywords", JArr(m.keywords | (k => JStr(k)))), ("target", JNum(m.target)),
 ])
 
-fn jstr(v: JsonValue, k: String) : String = json.as_string(json.get(v, k)) ?? ""
+fn jstr(v: JsonValue, k: String) : String = json.as_string(json.get(v, k) ?? JNull) ?? ""
 
 #[doc("Metadata sent by the page.")]
 pub fn meta_from(v: JsonValue) : Meta = Meta {
   title: jstr(v, "title"), synopsis: jstr(v, "synopsis"), label: jstr(v, "label"), status: jstr(v, "status"),
-  keywords: match json.get(v, "keywords") { JArr(xs) -> xs || (x => match x { JStr(s) -> [s]; _ -> [] }); _ -> [] },
-  target: json.as_int(json.get(v, "target")) ?? 0,
+  keywords: match (json.get(v, "keywords") ?? JNull) { JArr(xs) -> xs || (x => match x { JStr(s) -> [s]; _ -> [] }); _ -> [] },
+  target: json.as_int((json.get(v, "target") ?? JNull)) ?? 0,
 }
 
 #[doc("The book's header fields as the page sees them.")]
