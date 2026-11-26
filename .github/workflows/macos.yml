@@ -57,3 +57,21 @@ jobs:
         if: failure()
         run: |
           MOTU_PAGE='index.html#ready' lldb --batch -o run -o 'thread backtrace all' -k 'thread backtrace all' -k quit ./build/hello 2>&1 | tail -120
+
+      - name: Crash reports
+        if: failure()
+        run: |
+          for f in $(ls -t ~/Library/Logs/DiagnosticReports/*.ips 2>/dev/null | head -2); do
+            echo "== $f"
+            python3 - "$f" <<'PY'
+          import json, sys
+          lines = open(sys.argv[1]).read().split("\n", 1)
+          report = json.loads(lines[1])
+          print(report.get("exception"), report.get("termination", {}).get("indicator"))
+          images = report.get("usedImages", [])
+          thread = next(t for t in report["threads"] if t.get("triggered"))
+          for fr in thread["frames"][:40]:
+              img = images[fr["imageIndex"]].get("name", "?") if fr.get("imageIndex") is not None else "?"
+              print(f'{img:30} {fr.get("symbol", "?")}+{fr.get("symbolLocation", 0)}')
+          PY
+          done
