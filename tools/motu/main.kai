@@ -20,9 +20,12 @@ fn say(s: String) : Unit / Stderr = Stderr.eprint("motu: #{s}\n")
 
 fn fail(s: String) : Int / Stderr = { say(s); 1 }
 
-fn run_tool(cmd: String, argv: [String]) : Bool / Process = match process.wait(process.start(cmd, argv)) {
-  Ok(Exited(0)) -> true
-  _             -> false
+fn run_tool(cmd: String, argv: [String]) : Bool / Process = match process.start(cmd, argv) {
+  Err(_)    -> false
+  Ok(child) -> match process.wait(child) {
+    Ok(Exited(0)) -> true
+    _             -> false
+  }
 }
 
 fn parent(path: String) : String = match string.last_index_of(path, "/") {
@@ -194,11 +197,18 @@ fn dev_loop(a: App) : Int / Process + File + Clock + Stderr = {
   let stamp = newest(a.root, 0)
   let bin = "#{a.root}/build/#{a.name}-dev"
   if compile(a, bin) {
-    let child = process.start(bin, [])
-    wait_for_change(a, stamp)
-    say("change seen; restarting")
-    process.kill(child, 15) |> ignore
-    process.wait(child) |> ignore
+    match process.start(bin, []) {
+      Err(e) -> {
+        say("cannot start #{bin}: #{e}; waiting for a change")
+        wait_for_change(a, stamp)
+      }
+      Ok(child) -> {
+        wait_for_change(a, stamp)
+        say("change seen; restarting")
+        process.kill(child, 15) |> ignore
+        process.wait(child) |> ignore
+      }
+    }
   } else {
     say("build failed; waiting for a fix")
     wait_for_change(a, stamp)
