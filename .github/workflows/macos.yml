@@ -15,7 +15,7 @@ jobs:
 
       - name: Install kai
         run: |
-          curl -fsSL https://raw.githubusercontent.com/kaikailang-org/kaikai/main/install.sh | KAIKAI_DIST_BASE=https://github.com/kaikailang-org/kaikai/releases/download/v0.201.1 sh
+          curl -fsSL https://raw.githubusercontent.com/kaikailang-org/kaikai/main/install.sh | KAIKAI_DIST_BASE=https://github.com/kaikailang-org/kaikai/releases/download/v0.201.3 sh
           echo "$HOME/.kaikai/bin" >> "$GITHUB_PATH"
 
       - name: Build
@@ -56,8 +56,4 @@ jobs:
       - name: Backtrace
         if: failure()
         run: |
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            out=$(MOTU_PAGE='index.html#ready' lldb --batch -o run -o 'thread backtrace all' -k 'thread backtrace all' -k quit ./build/hello 2>&1)
-            if echo "$out" | grep -q 'stop reason = EXC_'; then echo "$out" | tail -150; break; fi
-            echo "run $i: no crash"
-          done
+          MOTU_PAGE='index.html#ready' lldb --batch -o run -o 'thread backtrace all' -k 'thread backtrace all' -k quit ./build/hello 2>&1 | tail -120
